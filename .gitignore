@@ -4,3 +4,4 @@ node_modules/
 .cma-*/
 .DS_Store
 dist/
+.claude/worktrees/
