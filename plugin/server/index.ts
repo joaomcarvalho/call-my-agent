@@ -4,6 +4,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { DECISION_KINDS, type DecisionKind, type JsonPatchOp } from '@cma/protocol';
 import { ToolError, errorText } from './call.ts';
+import { sanitizeLabel } from './format.ts';
 import { CallManager, type ToolResult } from './manager.ts';
 import { resolveRoot } from './store.ts';
 
@@ -22,8 +23,10 @@ function ok(result: ToolResult): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 
+/** Protocol details can quote plan item ids, which the peer chose, so they reach the model flattened to one line. */
 function failure(err: unknown): CallToolResult {
-  const body = err instanceof ToolError ? { error: err.code, detail: err.detail } : { error: 'INTERNAL', detail: errorText(err) };
+  const detail = sanitizeLabel(err instanceof ToolError ? err.detail : errorText(err), 500);
+  const body = { error: err instanceof ToolError ? err.code : 'INTERNAL', detail };
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(body) }] };
 }
 

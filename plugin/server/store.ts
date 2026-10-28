@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -139,12 +139,51 @@ export function ensureCallDir(root: string, session: string): CallPaths {
   return paths;
 }
 
-export function writeCallRecord(root: string, record: CallRecord): void {
-  const paths = ensureCallDir(root, record.session);
-  const tmp = `${paths.call}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+function writePrivateJson(path: string, value: unknown): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   chmodSync(tmp, 0o600);
-  renameSync(tmp, paths.call);
+  renameSync(tmp, path);
+}
+
+export function writeCallRecord(root: string, record: CallRecord): void {
+  writePrivateJson(ensureCallDir(root, record.session).call, record);
+}
+
+/** The relay seat an invite inspection took, kept until the call is joined. Holds a relay token, so it is 0600. */
+export interface PendingJoin {
+  session: string;
+  relay: string;
+  room: string;
+  token: string;
+}
+
+export function pendingJoinPath(root: string, session: string): string {
+  if (!SESSION_ID.test(session)) throw new Error(`invalid session id: ${JSON.stringify(session)}`);
+  return join(root, 'pending', `${session}.json`);
+}
+
+export function writePendingJoin(root: string, record: PendingJoin): void {
+  const path = pendingJoinPath(root, record.session);
+  mkdirSync(join(root, 'pending'), { recursive: true, mode: 0o700 });
+  writePrivateJson(path, record);
+}
+
+export function readPendingJoin(root: string, session: string): PendingJoin | null {
+  const path = pendingJoinPath(root, session);
+  if (!existsSync(path)) return null;
+  try {
+    const record = JSON.parse(readFileSync(path, 'utf8')) as Partial<PendingJoin>;
+    return typeof record.relay === 'string' && typeof record.room === 'string' && typeof record.token === 'string'
+      ? { session, relay: record.relay, room: record.room, token: record.token }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function removePendingJoin(root: string, session: string): void {
+  rmSync(pendingJoinPath(root, session), { force: true });
 }
 
 export function readCallRecord(root: string, session: string): CallRecord {
