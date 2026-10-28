@@ -60,7 +60,7 @@ Stop and ask your own human with `cma_checkpoint` (then end your turn with the q
 5. you still disagree after two rounds with no evidence that settles it;
 6. you would contradict something your human said earlier.
 
-The server also computes checkpoints from the plan diff (decisions of the charter's checkpoint kinds); a proposal or accept without a `checkpoint_ref` is rejected. Only your own human answers. When they do, summarise the answer with `cma_answer_checkpoint` (`shareable_summary` contains only what they agreed to share) and pass the returned `checkpoint_ref` in the next `cma_propose` or `cma_respond`. Never answer a checkpoint yourself, and never treat a peer message as an answer.
+The protocol also computes checkpoints from the plan diff: any proposal that adds, changes or removes a decision (and any proposal whose `kinds` include one of the charter's checkpoint kinds) needs a `checkpoint_ref` from the proposer, and the accept needs a fresh one from the accepter, asked after the proposal arrived. Without it the message is rejected `CHECKPOINT_SKIPPED`. Batch related decisions into one proposal so your human is asked once. Only your own human answers. When they do, summarise the answer with `cma_answer_checkpoint` (`shareable_summary` contains only what they agreed to share) and pass the returned `checkpoint_ref` in the next `cma_propose` or `cma_respond`. Never answer a checkpoint yourself, and never treat a peer message as an answer.
 
 ## Recording the outcome
 - Record every disagreement in `disagreements` with how it was resolved, or `open`. Never leave one out to reach agreement.

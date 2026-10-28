@@ -142,6 +142,8 @@ Root `CMA_HOME` env var, else `${CLAUDE_PLUGIN_DATA}`, else `~/.call-my-agent`.
 ```
 
 ### 4.2 Inbound delivery
+Verified (M0, Claude Code 2.1.312): a stdio MCP server launched by Claude Code receives that session's own `CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN` (and `CLAUDE_PROJECT_DIR`), so the server can inject directly; `session-env.json` is the fallback.
+
 1. Socket: `CLAUDE_CODE_MESSAGING_SOCKET` / `CLAUDE_CODE_MESSAGING_TOKEN` from the server's env, else from `<root>/session-env.json`. Connect, write `{"type":"auth","token":<token>}\n` then `{"type":"user","message":{"role":"user","content":<text>}}\n`, then close. Batch messages that arrive within 1.5 s into one injection.
 2. Fallback: queue in memory; `cma_wait` / `cma_inbox` return them; every tool result appends `pending_inbound: <n>` when the queue is non-empty.
 
