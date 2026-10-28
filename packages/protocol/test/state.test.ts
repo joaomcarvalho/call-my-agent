@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { sha256Hash } from '../src/canonical.ts';
 import { planHash } from '../src/plan.ts';
 import { replay, validateNext } from '../src/state.ts';
-import type { Decision, Envelope, JsonPatchOp } from '../src/types.ts';
+import { createPlanV0 } from '../src/templates.ts';
+import type { Decision, Envelope, JsonPatchOp, Party } from '../src/types.ts';
 import { deliver, expectAccepted, expectAgreement, expectRejected, withoutRejections, type Outcome } from './fixtures/deliver.ts';
 import {
+  CREATED_AT,
   EXPIRES_AT,
   KEYS,
   Transcript,
@@ -24,6 +26,26 @@ function decision(id: string, decided_by: Decision['decided_by']): Decision {
 
 function contextPatch(version: number, text: string): JsonPatchOp[] {
   return [versionTest(version), { op: 'replace', path: '/sections/0/md', value: text }];
+}
+
+/** Asks and answers a checkpoint for `party`, returning the answer id to cite as checkpoint_ref. */
+function checkpoint(t: Transcript, party: Party, id: string) {
+  expectAccepted(t, t.ask(party, id));
+  return expectAccepted(t, t.answer(party, id)).env.id;
+}
+
+/** DISCUSSING at version 1 with D9 decided by human-B, floor with A. */
+function withBDecision(): Transcript {
+  const { t } = at('say');
+  const proposed = checkpoint(t, 'B', 'cp-b-d9');
+  expectAccepted(t, t.propose('B', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-B') }], { checkpoint_ref: proposed }));
+  expectAccepted(t, t.accept('A', { checkpoint_ref: checkpoint(t, 'A', 'cp-a-d9') }));
+  expectAccepted(t, t.say('B', 'over to you'));
+  return t;
+}
+
+function nested(depth: number): unknown {
+  return JSON.parse('['.repeat(depth) + ']'.repeat(depth));
 }
 
 /** B proposes, then three counters in a row. */
@@ -234,6 +256,76 @@ const SCENARIOS: Record<string, () => Scenario> = {
     expectAccepted(t, t.abort('B'));
     return { t, env: t.say('A', 'anyone there?'), expect: 'INVALID_STATE' };
   },
+  'body nested 50 000 deep': () => {
+    const { t } = at('welcome');
+    return { t, env: { ...t.say('A', 'x'), body: { text: 'x', junk: nested(50_000) } }, expect: 'BAD_SCHEMA' };
+  },
+  'envelope with more than 20 000 values': () => {
+    const { t } = at('welcome');
+    return { t, env: t.envelope('A', 'say', { text: 'x', junk: new Array(20_001).fill(0) }), expect: 'BAD_SCHEMA' };
+  },
+  'patch with more than 200 ops': () => {
+    const { t } = at('welcome');
+    const ops = Array.from({ length: 200 }, (): JsonPatchOp => ({ op: 'test', path: '/version', value: 0 }));
+    return { t, env: t.propose('A', [versionTest(0), ...ops]), expect: 'BAD_PATCH' };
+  },
+  'copy ops doubling the plan': () => {
+    const { t } = at('welcome');
+    const copies = Array.from({ length: 30 }, (): JsonPatchOp => ({ op: 'copy', from: '/sections', path: '/sections/-' }));
+    return { t, env: t.propose('A', [versionTest(0), ...copies]), expect: 'TOO_LARGE' };
+  },
+  'decision added without kind or checkpoint_ref': () => {
+    const { t } = at('welcome');
+    return { t, env: t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'agent-assumed') }]), expect: 'CHECKPOINT_SKIPPED' };
+  },
+  'agent-assumed decision removed without checkpoint_ref': () => {
+    const { t } = at('accept_counter');
+    return { t, env: t.propose('A', [versionTest(1), { op: 'remove', path: '/decisions/1' }]), expect: 'CHECKPOINT_SKIPPED' };
+  },
+  'accept of a kindless decision without checkpoint_ref': () => {
+    const { t } = at('welcome');
+    const ref = checkpoint(t, 'A', 'cp-a-d9');
+    expectAccepted(t, t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'agent-assumed') }], { checkpoint_ref: ref }));
+    return { t, env: t.accept('B'), expect: 'CHECKPOINT_SKIPPED' };
+  },
+  'plan_v0 that is not the charter template': () => {
+    const t = new Transcript();
+    const plan = createPlanV0(t.charter, t.charterHash, t.charter.invitee_label);
+    plan.decisions.push(decision('D1', 'human-B'));
+    return { t, env: t.envelope('A', 'session_open', { charter: t.charter, charter_hash: t.charterHash, plan_v0: plan, plan_v0_hash: planHash(plan) }), expect: 'CHARTER_MISMATCH' };
+  },
+  'A removing a decision decided by human-B': () => {
+    const t = withBDecision();
+    return { t, env: t.propose('A', [versionTest(1), { op: 'remove', path: '/decisions/0' }]), expect: 'OWNER_VIOLATION' };
+  },
+  'A reattributing a decision decided by human-B': () => {
+    const t = withBDecision();
+    return { t, env: t.propose('A', [versionTest(1), { op: 'replace', path: '/decisions/0', value: decision('D9', 'human-A') }]), expect: 'OWNER_VIOLATION' };
+  },
+  'plan text with a bidi override': () => {
+    const { t } = at('welcome');
+    return { t, env: t.propose('A', contextPatch(0, 'pay \u202Eevil')), expect: 'BAD_PATCH' };
+  },
+  'plan text with an escape sequence': () => {
+    const { t } = at('welcome');
+    return { t, env: t.propose('A', contextPatch(0, 'ok \u001b[8mhidden\u001b[0m')), expect: 'BAD_PATCH' };
+  },
+  'plan text with a lone surrogate': () => {
+    const { t } = at('welcome');
+    return { t, env: t.propose('A', contextPatch(0, 'text \ud800 more')), expect: 'BAD_PATCH' };
+  },
+  'signoff naming another human': () => {
+    const { t } = at('accept_signoff');
+    return { t, env: t.signoff('B', 'approve', { statement: { human: 'cfo@orders.example' } }), expect: 'SIGNOFF_MISMATCH' };
+  },
+  'welcome dated after expires_at': () => {
+    const { t } = at('hello');
+    return { t, env: t.welcome({ ts: '2099-01-01T00:00:00.000Z' }), expect: 'INVALID_STATE' };
+  },
+  'welcome dated before created_at': () => {
+    const { t } = at('hello');
+    return { t, env: t.welcome({ ts: new Date(Date.parse(CREATED_AT) - 1).toISOString() }), expect: 'INVALID_STATE' };
+  },
 };
 
 /** Delivers the scenario's message and checks replay did what the scenario expects. */
@@ -407,13 +499,19 @@ describe('decision attribution', () => {
 
   test('a party may record a decision by its own human', () => {
     const { t } = at('welcome');
-    expectAccepted(t, t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-A') }]));
+    expectAccepted(t, t.ask('A', 'cp-a-d9'));
+    const answer = expectAccepted(t, t.answer('A', 'cp-a-d9')).env;
+    expectAccepted(t, t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-A') }], { checkpoint_ref: answer.id }));
   });
 
   test('the peer may accept a decision attributed to the proposer’s human', () => {
     const { t } = at('welcome');
-    expectAccepted(t, t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-A') }]));
-    expectAccepted(t, t.accept('B'));
+    expectAccepted(t, t.ask('A', 'cp-a-d9'));
+    const answerA = expectAccepted(t, t.answer('A', 'cp-a-d9')).env;
+    expectAccepted(t, t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-A') }], { checkpoint_ref: answerA.id }));
+    expectAccepted(t, t.ask('B', 'cp-b-d9'));
+    const answerB = expectAccepted(t, t.answer('B', 'cp-b-d9')).env;
+    expectAccepted(t, t.accept('B', { checkpoint_ref: answerB.id }));
     expect(t.state().plan?.decisions).toEqual([decision('D9', 'human-A')]);
   });
 });
@@ -715,6 +813,61 @@ describe('handshake and lifecycle', () => {
     const pending = t.state().pending!;
     expectAccepted(t, t.reject('A'));
     expect(t.state()).toMatchObject({ state: 'DISCUSSING', pending: null, rejectedHashes: [pending.resultHash], floor: 'B' });
+  });
+});
+
+describe('hardening rules', () => {
+  test('an envelope nested deeper than 64 levels or with more than 20 000 values is rejected BAD_SCHEMA', () => {
+    run('body nested 50 000 deep');
+    run('envelope with more than 20 000 values');
+  });
+
+  test('a patch with more than 200 ops is rejected BAD_PATCH', () => {
+    run('patch with more than 200 ops');
+  });
+
+  test('a patch that grows the plan past max_plan_bytes mid-way is rejected TOO_LARGE', () => {
+    run('copy ops doubling the plan');
+  });
+
+  test('adding or removing any decision needs the proposer’s checkpoint_ref', () => {
+    run('decision added without kind or checkpoint_ref');
+    run('agent-assumed decision removed without checkpoint_ref');
+  });
+
+  test('accepting any decision change needs the accepter’s checkpoint_ref', () => {
+    run('accept of a kindless decision without checkpoint_ref');
+  });
+
+  test('a declared checkpoint kind still needs checkpoint_ref when no decision changes', () => {
+    const { t } = at('welcome');
+    expectRejected(t, t.propose('A', contextPatch(0, 'breaking prose'), { kinds: ['breaking_change'] }), 'CHECKPOINT_SKIPPED');
+    expectAccepted(t, t.propose('A', contextPatch(0, 'plain prose')));
+    expectAccepted(t, t.accept('B'));
+  });
+
+  test('plan_v0 must be the charter’s template plan', () => {
+    run('plan_v0 that is not the charter template');
+  });
+
+  test('a party cannot remove or reattribute a decision decided by the other human', () => {
+    run('A removing a decision decided by human-B');
+    run('A reattributing a decision decided by human-B');
+  });
+
+  test('plan text with control, format or unpaired surrogate characters is rejected BAD_PATCH', () => {
+    run('plan text with a bidi override');
+    run('plan text with an escape sequence');
+    run('plan text with a lone surrogate');
+  });
+
+  test('a signoff naming a human other than the party’s identity is rejected SIGNOFF_MISMATCH', () => {
+    run('signoff naming another human');
+  });
+
+  test('a welcome dated outside the charter’s lifetime is rejected INVALID_STATE', () => {
+    run('welcome dated after expires_at');
+    run('welcome dated before created_at');
   });
 });
 

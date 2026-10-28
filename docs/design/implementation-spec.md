@@ -29,14 +29,15 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 ### 2.2 Log order and replay
 - The log order is **relay order** (`relay_seq` ascending). A client applies a message only after the relay echoes it with a `relay_seq`, including its own.
 - `replay(envelopes, opts)` is a pure function. Invalid messages are **skipped and recorded** in `result.rejected` (`{id, code, detail}`), never thrown. Two parties replaying the same log get identical results.
+- Before the envelope check, an iterative walk rejects any entry nested more than 64 arrays/objects deep or holding more than 20 000 values → `BAD_SCHEMA`. Each step of `replay` and `validateNext` runs inside a try/catch; any exception is recorded as `BAD_SCHEMA` with the exception message.
 - Duplicate ids are ignored silently (not recorded).
 - Per-sender chain: `seq` must be last+1 and `prev` must equal the id of the sender's previous accepted message, else `CHAIN_GAP` (seq too high) / `CHAIN_DUPLICATE` (seq already used, different id) / `CHAIN_FORK` (prev mismatch). Rejected messages do not advance the chain.
 - Membership: party A's agent key is `charter.inviter.agent_key`; party B's is the `identity.agent_key` of the first valid `hello`. A message whose `from.party`/`from.agent_key` don't match is `UNKNOWN_SENDER`.
 
 ### 2.3 Handshake
-1. First message must be `session_open` from A with seq 1. `charter_hash == hashObject(charter)`, `plan_v0_hash == hashObject(plan_v0)`, `plan_v0.version == 0`, `plan_v0.meta.charter_hash == charter_hash`. State `INVITED`.
+1. First message must be `session_open` from A with seq 1. `charter_hash == hashObject(charter)`, `plan_v0` must pass `PlanSchema` and deep-equal `createPlanV0(charter, charter_hash, charter.invitee_label)` (else `CHARTER_MISMATCH`), `plan_v0_hash == hashObject(plan_v0)`. State `INVITED`.
 2. `hello` from B: `charter_hash` matches; if `opts.joinSecret` is given, `join_proof == hex(sha256(secret || utf8(session)))` else `JOIN_PROOF_INVALID`. State `HANDSHAKE`. `identity.agent_key` must equal `from.agent_key`.
-3. `welcome` from A with matching `charter_hash` → `DISCUSSING`. Floor starts with **A**.
+3. `welcome` from A with matching `charter_hash` and `charter.created_at <= ts <= charter.expires_at` (else `INVALID_STATE`) → `DISCUSSING`. Floor starts with **A**.
 4. `abort` from B while `INVITED` → `DECLINED`.
 5. If `opts.now` is past `charter.expires_at` while `INVITED` → `EXPIRED`. After `welcome`, if `opts.now` is past `welcome.ts + budgets.ttl_s` → `EXPIRED` (`INVITED`/`HANDSHAKE` expire at `charter.expires_at`).
 
@@ -51,11 +52,13 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 
 ### 2.5 Proposals
 - At most one pending proposal. `propose` while one is pending → `PROPOSAL_PENDING`.
+- A patch has at most 200 ops, else `BAD_PATCH`.
 - A patch must begin with `{"op":"test","path":"/version","value":<current version>}`. Missing → `BAD_PATCH`; wrong value → `STALE_BASE`.
 - A patch may not touch `/schema`, `/session`, `/version`, `/parent`, `/meta/charter_hash`, `/meta/parties` → `BAD_PATCH`.
 - A party may not modify (add/replace/remove anything under) a section whose `owner` is the other party → `OWNER_VIOLATION`.
-- A party may not add or change a decision whose `decided_by` is the other party's human (`human-B` from A) → `OWNER_VIOLATION`.
-- Result = apply patch to a deep copy, then `version = old + 1`, `parent = old hash`. The result must pass `PlanSchema` and be ≤ `max_plan_bytes` of JCS → else `BAD_PATCH` / `TOO_LARGE`. Artifact `sha256` must equal sha256 of its content → `BAD_PATCH`.
+- Decisions are compared by `id` over the union of ids before and after the patch. For any decision whose content differs, if `before.decided_by` or `after.decided_by` is the other party's human (`human-B` from A), the proposal is `OWNER_VIOLATION`: a party may not remove, change or produce a decision attributed to the other human.
+- Result = apply the ops one at a time to a deep copy; after each op the JCS size must be ≤ `max_plan_bytes`, else `TOO_LARGE`. Then `version = old + 1`, `parent = old hash`. The result must pass `PlanSchema` and be ≤ `max_plan_bytes` of JCS → else `BAD_PATCH` / `TOO_LARGE`. Artifact `sha256` must equal sha256 of its content → `BAD_PATCH`.
+- `PlanSchema` rejects any plan string containing an unpaired UTF-16 surrogate, a C0 control other than `\n` and `\t`, a C1 control (U+0080–U+009F), or a zero-width/bidi format character (U+200B–U+200F, U+202A–U+202E, U+2060–U+2069, U+FEFF).
 - If the result hash is in `rejectedHashes` (result hashes of rejected or countered proposals) → `RECREATES_REJECTED`.
 - Validation happens when the proposal arrives; the plan only changes on `accept`.
 - `accept.result_hash` must equal the computed result hash, else the accept is rejected `STALE_BASE`.
@@ -63,8 +66,8 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 - `withdraw` clears the pending proposal; `amend` replaces it (same validation as propose).
 
 ### 2.6 Checkpoints (computed)
-- Effective kinds of a proposal = declared `kinds` ∪ the `kind` of every decision added or changed by the patch (compare decisions by `id`, before vs after).
-- If effective kinds ∩ `charter.checkpoint_kinds` is non-empty:
+- Effective kinds of a proposal = declared `kinds` ∪ the `kind` of every decision added, changed or removed by the patch (compare decisions by `id`, before vs after).
+- A proposal needs checkpoints when it adds, changes or removes **any** decision (whatever its `kind`, or none), or when its effective kinds ∩ `charter.checkpoint_kinds` is non-empty (so a declared kind still triggers it for non-decision changes). Then:
   - the proposer's `propose`/`counter`/`amend` must carry `checkpoint_ref` = id of a `user_answer_summary` from the **same party**, earlier in the log;
   - the accepting party's `accept` must carry `checkpoint_ref` = id of a `user_answer_summary` from the **accepting party** that comes **after** the proposal.
   - Otherwise the message is rejected `CHECKPOINT_SKIPPED`.
@@ -74,13 +77,20 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 - `request_signoff` (control) is allowed in `DISCUSSING` with no pending proposal when `version`/`hash` equal the current plan, `md_hash == sha256Hash(renderMarkdown(plan))`, and no open item has `blocking: true` and `status: "open"`. Else `INVALID_STATE`. A pending signoff request blocks new proposals (`INVALID_STATE`).
 - The other party's `accept` with `proposal = <request_signoff id>` and `result_hash = hash` → `FROZEN`. Its `reject` clears the request. (This accept/reject is a floor message.)
 - In `FROZEN`: `say` is allowed; proposals are `INVALID_STATE`. `unfreeze` by either party before any signoff → `DISCUSSING`.
-- `signoff`: `statement` must match: `session`, `version`, `plan_hash`, `md_hash` of the frozen plan, `mode` and `charter_hash` of the charter, `party == from.party`, `human_key == identity.human_key` of that party, and `human_sig` verifies over `JCS(statement)`. Else `SIGNOFF_MISMATCH`. `decline` → `DISCUSSING`, collected signoffs void. Both `approve` → `AGREED`.
+- `signoff`: `statement` must match: `session`, `version`, `plan_hash`, `md_hash` of the frozen plan, `mode` and `charter_hash` of the charter, `party == from.party`, `human == identity.human` and `human_key == identity.human_key` of that party, and `human_sig` verifies over `JCS(statement)`. Else `SIGNOFF_MISMATCH`. `decline` → `DISCUSSING`, collected signoffs void. Both `approve` → `AGREED`.
 - `plan_final` in `AGREED` must list one valid approve signoff id per party with matching hashes. `bye {stored}` with the agreed hash from both → `CLOSED`.
 - `abort` from either party in any open state → `ABORTED`.
 - `resolve` in `DEADLOCKED`: `extend` → back to `DISCUSSING`, `no_progress` and counter streak reset, each party's turn budget extended by half of `turns_per_party`; `abort` → `ABORTED`; `partial` → `INVALID_STATE` in v0.1.
 
 ### 2.8 Plan rendering
 `renderMarkdown(plan)` is deterministic and stable across platforms: `\n` line endings, no trailing spaces, ends with exactly one `\n`, no dates or locale formatting. Order: title, meta line, decisions table (agent-assumed first, then by id), sections in array order (artifacts as fenced blocks with their format as info string), disagreements, open items, action items per party.
+
+Plan text cannot hide or impersonate document structure:
+- Titles, labels, table cells and list item text: every `<` is emitted as `&lt;`; `|` in table cells is escaped as `\|`. Continuation lines of list items also get the heading, setext and fence rules below.
+- Section `md`, outside fenced code blocks and inline code spans, every `<` is emitted as `&lt;` (a backslash-escaped `\<` becomes `&lt;` too). ATX headings, including those inside block quotes and list items, are shifted three levels and capped at 6, so they render at level 4 or deeper.
+- Only an unindented ```` ``` ```` or `~~~` line opens a fence the renderer tracks; it closes as CommonMark closes it (up to 3 spaces of indent, same character, at least as long). A fence still open at the end of the section is closed. A `~~~` line that is indented or inside a block quote or list item is escaped as `\~~~`.
+- An inline code span must close on the same line and contain no `|` (GFM splits table cells before it finds code spans). Every other backtick is escaped as `` \` ``, so a span can never open on one line and close on another.
+- A line of only `=` or `-` that follows a non-blank line is escaped with a leading `\`, so it cannot turn the line above into a setext heading.
 
 ### 2.9 E2EE
 - Bootstrap key `K0 = HKDF-SHA256(ikm = join secret, salt = utf8(session), info = "cma/0.1 k0", 32)`. Used for `session_open` and `hello`.
@@ -92,6 +102,9 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 
 ### 2.11 Four-word code
 `fourWordCode(a: KeyId, b: KeyId)`: sort the two key ids, sha256 of `a + "|" + b`, take bytes 0..3, map each through a fixed 256-word list. Identical on both sides.
+
+### 2.12 Agreement verification
+`verifyAgreementFile(text, expected?: { humanKeys?: Partial<Record<Party, KeyId>> })` checks the file as §4.5 describes and that the embedded plan passes `PlanSchema`. When `expected.humanKeys` names a key for a party, a different `human_key` in the file fails with `unexpected key for party <A|B>`; without it, valid signatures only prove the file is self-consistent. On success the verdict lists, per party, `human`, `human_key`, `agent_key` (from the file) and `signed_at`. `renderAgreementFile` refuses a plan that fails `PlanSchema`.
 
 ## 3. Relay wire protocol (packages/relay)
 
