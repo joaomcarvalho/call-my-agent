@@ -38,7 +38,7 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 2. `hello` from B: `charter_hash` matches; if `opts.joinSecret` is given, `join_proof == hex(sha256(secret || utf8(session)))` else `JOIN_PROOF_INVALID`. State `HANDSHAKE`. `identity.agent_key` must equal `from.agent_key`.
 3. `welcome` from A with matching `charter_hash` → `DISCUSSING`. Floor starts with **A**.
 4. `abort` from B while `INVITED` → `DECLINED`.
-5. If `opts.now` is past `charter.expires_at` while `INVITED` → `EXPIRED`. If `opts.now` is past `created_at + budgets.ttl_s` in any open state → `EXPIRED`.
+5. If `opts.now` is past `charter.expires_at` while `INVITED` → `EXPIRED`. After `welcome`, if `opts.now` is past `welcome.ts + budgets.ttl_s` → `EXPIRED` (`INVITED`/`HANDSHAKE` expire at `charter.expires_at`).
 
 ### 2.4 Floor and turns
 - Floor messages: `say`, `propose`, `counter`, `accept`, `reject`. Each requires `from.party == floor` (else `NOT_YOUR_FLOOR`) and passes the floor to the other party. Each counts one turn for the sender.
@@ -54,6 +54,7 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 - A patch must begin with `{"op":"test","path":"/version","value":<current version>}`. Missing → `BAD_PATCH`; wrong value → `STALE_BASE`.
 - A patch may not touch `/schema`, `/session`, `/version`, `/parent`, `/meta/charter_hash`, `/meta/parties` → `BAD_PATCH`.
 - A party may not modify (add/replace/remove anything under) a section whose `owner` is the other party → `OWNER_VIOLATION`.
+- A party may not add or change a decision whose `decided_by` is the other party's human (`human-B` from A) → `OWNER_VIOLATION`.
 - Result = apply patch to a deep copy, then `version = old + 1`, `parent = old hash`. The result must pass `PlanSchema` and be ≤ `max_plan_bytes` of JCS → else `BAD_PATCH` / `TOO_LARGE`. Artifact `sha256` must equal sha256 of its content → `BAD_PATCH`.
 - If the result hash is in `rejectedHashes` (result hashes of rejected or countered proposals) → `RECREATES_REJECTED`.
 - Validation happens when the proposal arrives; the plan only changes on `accept`.
