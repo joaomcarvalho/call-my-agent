@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { timingSafeEqual } from 'node:crypto';
-import { base64urlDecode, base64urlEncode, isKeyId, sha256Hash } from '@cma/protocol';
+import { base64urlDecode, base64urlEncode, isKeyId, sha256Hash, verifyBytes } from '@cma/protocol';
 
 export interface RelayOptions {
   port?: number;
@@ -14,6 +14,11 @@ const MAX_TTL_S = 259200;
 const RATE_LIMIT = 30;
 const RATE_WINDOW_MS = 60_000;
 const MAX_MEMBERS = 2;
+const PROOF_SKEW_MS = 5 * 60_000;
+const ROOM_CREATE_LIMIT = 20;
+const ROOM_MAX_MESSAGES = 2000;
+const ROOM_MAX_BYTES = 50 * 1024 * 1024;
+const SYNC_PAGE = 500;
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 
 interface WsData {
@@ -54,6 +59,13 @@ function randomToken(): string {
 
 function json(status: number, body: unknown): Response {
   return Response.json(body, { status });
+}
+
+function verifyResumeProof(room: string, memberKey: string, ts: unknown, proof: unknown, nowMs: number): boolean {
+  if (typeof ts !== 'string' || typeof proof !== 'string') return false;
+  const t = Date.parse(ts);
+  if (!Number.isFinite(t) || Math.abs(nowMs - t) > PROOF_SKEW_MS) return false;
+  return verifyBytes(new TextEncoder().encode(`cma-relay-resume|${room}|${ts}`), proof, memberKey);
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -114,8 +126,11 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
   const msgByIdFull = db.query<MessageRow, [string, string]>(
     'SELECT relay_seq, msg_id, sender_key, payload, ts FROM messages WHERE room = ? AND msg_id = ?',
   );
-  const msgsAfter = db.query<MessageRow, [string, number]>(
-    'SELECT relay_seq, msg_id, sender_key, payload, ts FROM messages WHERE room = ? AND relay_seq > ? ORDER BY relay_seq',
+  const msgsAfter = db.query<MessageRow, [string, number, number]>(
+    'SELECT relay_seq, msg_id, sender_key, payload, ts FROM messages WHERE room = ? AND relay_seq > ? ORDER BY relay_seq LIMIT ?',
+  );
+  const roomUsage = db.query<{ n: number; bytes: number }, [string]>(
+    'SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0) AS bytes FROM messages WHERE room = ?',
   );
   const headSeq = db.query<{ head: number }, [string]>(
     'SELECT COALESCE(MAX(relay_seq), 0) AS head FROM messages WHERE room = ?',
@@ -133,6 +148,16 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
 
   const sockets = new Map<string, Set<Socket>>();
   const sendTimes = new Map<string, number[]>();
+  const createTimes = new Map<string, number[]>();
+  let lastSweep = now();
+
+  const sweepRateMaps = (t: number): void => {
+    if (t - lastSweep < RATE_WINDOW_MS) return;
+    lastSweep = t;
+    for (const map of [sendTimes, createTimes]) {
+      for (const [k, v] of map) if (v.every((x) => t - x >= RATE_WINDOW_MS)) map.delete(k);
+    }
+  };
 
   const isOnline = (room: string, key: string): boolean => {
     for (const s of sockets.get(room) ?? []) if (s.data.memberKey === key) return true;
@@ -156,7 +181,15 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     }
   };
 
-  async function createRoom(req: Request): Promise<Response> {
+  async function createRoom(req: Request, srv: Bun.Server<WsData>): Promise<Response> {
+    const t = now();
+    sweepRateMaps(t);
+    const ip = srv.requestIP(req)?.address ?? 'unknown';
+    const recent = (createTimes.get(ip) ?? []).filter((x) => t - x < RATE_WINDOW_MS);
+    if (recent.length >= ROOM_CREATE_LIMIT) {
+      createTimes.set(ip, recent);
+      return json(429, { error: 'too many rooms created' });
+    }
     const body = await readJson(req);
     if (!body) return json(400, { error: 'bad body' });
     const { secret_hash, creator_key, ttl_s } = body;
@@ -167,7 +200,8 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     }
     const room = randomRoomId();
     const token = randomToken();
-    const t = now();
+    recent.push(t);
+    createTimes.set(ip, recent);
     db.transaction(() => {
       insertRoom.run(room, secret_hash, t, t + ttl_s * 1000);
       upsertMember.run(room, creator_key, hashToken(token));
@@ -178,7 +212,7 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
   async function joinRoom(req: Request, room: string): Promise<Response> {
     const body = await readJson(req);
     if (!body) return json(400, { error: 'bad body' });
-    const { secret, member_key } = body;
+    const { secret, member_key, ts, proof } = body;
     if (typeof secret !== 'string' || !isKeyId(member_key)) return json(400, { error: 'bad body' });
     const row = getRoom.get(room);
     if (!row) return json(404, { error: 'unknown room' });
@@ -188,6 +222,26 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     const members = getMembers.all(room);
     if (members.length >= MAX_MEMBERS && !members.some((m) => m.member_key === member_key)) {
       return json(409, { error: 'room full' });
+    }
+    if (members.some((m) => m.member_key === member_key) && !verifyResumeProof(room, member_key, ts, proof, now())) {
+      return json(403, { error: 'resume proof required' });
+    }
+    const token = randomToken();
+    upsertMember.run(room, member_key, hashToken(token));
+    return json(200, { member_token: token });
+  }
+
+  async function resumeRoom(req: Request, room: string): Promise<Response> {
+    const body = await readJson(req);
+    if (!body) return json(400, { error: 'bad body' });
+    const { member_key, ts, proof } = body;
+    if (!isKeyId(member_key)) return json(400, { error: 'bad body' });
+    const row = getRoom.get(room);
+    if (!row) return json(404, { error: 'unknown room' });
+    if (now() >= row.expires_at) return json(410, { error: 'expired' });
+    const isMember = getMembers.all(room).some((m) => m.member_key === member_key);
+    if (!isMember || !verifyResumeProof(room, member_key, ts, proof, now())) {
+      return json(403, { error: 'resume proof required' });
     }
     const token = randomToken();
     upsertMember.run(room, member_key, hashToken(token));
@@ -217,6 +271,7 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     if (Buffer.byteLength(payload) > MAX_PAYLOAD_BYTES) {
       return sendError(ws, 'TOO_LARGE', `payload exceeds ${MAX_PAYLOAD_BYTES} bytes`, msgId);
     }
+    sweepRateMaps(now());
     const rateKey = `${room}\u0000${memberKey}`;
     const t = now();
     const recent = (sendTimes.get(rateKey) ?? []).filter((x) => t - x < RATE_WINDOW_MS);
@@ -230,6 +285,10 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     const existing = findMsgById.get(room, msgId);
     if (existing) {
       return sendFrame(ws, { t: 'sent', msg_id: msgId, relay_seq: existing.relay_seq, dup: true });
+    }
+    const usage = roomUsage.get(room)!;
+    if (usage.n >= ROOM_MAX_MESSAGES || usage.bytes + Buffer.byteLength(payload) > ROOM_MAX_BYTES) {
+      return sendError(ws, 'ROOM_FULL', 'room message or size cap reached', msgId);
     }
     insertMsg.run(room, room, msgId, memberKey, payload, new Date(t).toISOString());
     const stored = msgByIdFull.get(room, msgId)!;
@@ -245,9 +304,11 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
       return sendError(ws, 'BAD_FRAME', 'sync needs integer after >= 0');
     }
     const { room } = ws.data;
-    for (const m of msgsAfter.all(room, after)) sendFrame(ws, { t: 'msg', ...m });
-    ws.data.synced = true;
-    sendFrame(ws, { t: 'synced', head: headSeq.get(room)!.head });
+    const rows = msgsAfter.all(room, after, SYNC_PAGE + 1);
+    const more = rows.length > SYNC_PAGE;
+    for (const m of rows.slice(0, SYNC_PAGE)) sendFrame(ws, { t: 'msg', ...m });
+    if (!more) ws.data.synced = true;
+    sendFrame(ws, { t: 'synced', head: headSeq.get(room)!.head, more });
   }
 
   const server = Bun.serve<WsData>({
@@ -257,9 +318,11 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
       const url = new URL(req.url);
       const path = url.pathname;
       if (req.method === 'GET' && path === '/v1/health') return json(200, { ok: true });
-      if (req.method === 'POST' && path === '/v1/rooms') return createRoom(req);
+      if (req.method === 'POST' && path === '/v1/rooms') return createRoom(req, srv);
       const join = /^\/v1\/rooms\/([^/]+)\/join$/.exec(path);
       if (req.method === 'POST' && join) return joinRoom(req, join[1]!);
+      const resume = /^\/v1\/rooms\/([^/]+)\/resume$/.exec(path);
+      if (req.method === 'POST' && resume) return resumeRoom(req, resume[1]!);
       const ws = /^\/v1\/rooms\/([^/]+)\/ws$/.exec(path);
       if (req.method === 'GET' && ws) return upgrade(req, url, ws[1]!, srv);
       return json(404, { error: 'not found' });
