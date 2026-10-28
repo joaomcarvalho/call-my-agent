@@ -97,19 +97,21 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 
 HTTP, JSON bodies:
 - `GET /v1/health` → `{ok: true}`
-- `POST /v1/rooms` `{secret_hash: hex sha256 of the secret bytes, creator_key: KeyId, ttl_s ≤ 259200}` → 201 `{room, creator_token}`. Room id = `r` + 16 random base32 chars (lowercase).
-- `POST /v1/rooms/:room/join` `{secret: b64url, member_key: KeyId}` → 200 `{member_token}`. 403 wrong secret, 409 a different key already joined, 410 expired, 404 unknown room. The same key joining again gets a fresh token (resume).
+- `POST /v1/rooms` `{secret_hash: hex sha256 of the secret bytes, creator_key: KeyId, ttl_s ≤ 259200}` → 201 `{room, creator_token}`. Room id = `r` + 16 random base32 chars (lowercase). At most 20 creations per minute per client IP, else 429.
+- `POST /v1/rooms/:room/join` `{secret: b64url, member_key: KeyId, ts?, proof?}` → 200 `{member_token}`. 403 wrong secret, 409 a different key already joined, 410 expired, 404 unknown room. A first join of a key needs only the secret. Joining with a key that is already a member is a seat resume and also needs `ts` and `proof` (below), else 403. A resume issues a fresh token and invalidates the previous one.
+- `POST /v1/rooms/:room/resume` `{member_key, ts, proof}` → 200 `{member_token}`. Resume without the secret (the creator's path). 403 for a non-member key or a bad proof; 404/410 as for join.
+- Resume proof: `proof` is the base64url Ed25519 signature, by `member_key`, over the UTF-8 string `cma-relay-resume|<room>|<ts>`; `ts` is an ISO timestamp within ±5 minutes of the relay clock.
 - Tokens are 32 random bytes b64url; the relay stores only their sha256.
 
 WebSocket `GET /v1/rooms/:room/ws?token=<token>`; JSON text frames:
 - C→R `{t:"send", msg_id, payload}` → R→C `{t:"sent", msg_id, relay_seq, dup}`; R→all connected members incl. sender `{t:"msg", relay_seq, msg_id, sender_key, payload, ts}`. Dedup on `(room, msg_id)`: a duplicate returns the original `relay_seq` with `dup: true` and is not re-broadcast.
-- C→R `{t:"sync", after}` → every stored msg with `relay_seq > after` as `msg` frames, then `{t:"synced", head}`.
+- C→R `{t:"sync", after}` → at most 500 stored msgs with `relay_seq > after`, in order, as `msg` frames, then `{t:"synced", head, more}`. When `more` is true the client sends another `sync` with its latest `relay_seq`; live delivery to that socket starts only after a `synced` with `more: false`.
 - C→R `{t:"ack", cursor}` → stored per member.
 - R→C `{t:"presence", member_key, online}` on connect/disconnect of the other member, and once on connect for the peer's current status.
-- R→C `{t:"error", code, detail}` with codes `TOO_LARGE` (payload > 262144 bytes), `RATE_LIMITED` (> 30 sends/min per member), `EXPIRED`, `BAD_FRAME`.
+- R→C `{t:"error", code, detail}` with codes `TOO_LARGE` (payload > 262144 bytes), `RATE_LIMITED` (> 30 sends/min per member), `ROOM_FULL` (the room already holds 2 000 messages or 50 MB of payload), `EXPIRED`, `BAD_FRAME`.
 - Max 2 members per room (creator + one joiner). Retention: rooms past `expires_at + 7 days` may be deleted.
 
-`RelayClient` (packages/relay/src/client.ts): static `createRoom`, `joinRoom`; instance `connect()`, `send(msgId, payload) → Promise<{relay_seq, dup}>`, `ack(cursor)`, `close()`; callbacks `onMessage(msg)`, `onPresence(p)`; auto-reconnect with backoff, `sync` from the last seen relay_seq after every (re)connect, and unconfirmed sends are retried after reconnect (dedup makes this safe).
+`RelayClient` (packages/relay/src/client.ts): static `createRoom`, `joinRoom(relayUrl, room, {secret, memberKey, sign?})`, `resumeSeat(relayUrl, room, {memberKey, sign})` (`sign(bytes) => base64url` signs with the member's key); instance `connect()`, `send(msgId, payload) → Promise<{relay_seq, dup}>`, `ack(cursor)`, `close()`; callbacks `onMessage(msg)`, `onPresence(p)`; auto-reconnect with backoff, `sync` from the last seen relay_seq after every (re)connect (repeating while `more`), and unconfirmed sends are retried after reconnect (dedup makes this safe).
 
 ## 4. Plugin (plugin/)
 

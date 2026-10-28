@@ -54,6 +54,13 @@ async function postJson(url: string, body: unknown): Promise<Record<string, unkn
   return data;
 }
 
+export type SignFn = (bytes: Uint8Array) => string | Promise<string>;
+
+async function resumeProof(room: string, sign: SignFn): Promise<{ ts: string; proof: string }> {
+  const ts = new Date().toISOString();
+  return { ts, proof: await sign(new TextEncoder().encode(`cma-relay-resume|${room}|${ts}`)) };
+}
+
 const MIN_BACKOFF_MS = 100;
 const MAX_BACKOFF_MS = 5000;
 
@@ -73,11 +80,24 @@ export class RelayClient {
   static async joinRoom(
     relayUrl: string,
     room: string,
-    args: { secret: string; memberKey: string },
+    args: { secret: string; memberKey: string; sign?: SignFn },
   ): Promise<{ token: string }> {
     const data = await postJson(`${relayUrl}/v1/rooms/${room}/join`, {
       secret: args.secret,
       member_key: args.memberKey,
+      ...(args.sign ? await resumeProof(room, args.sign) : {}),
+    });
+    return { token: data.member_token as string };
+  }
+
+  static async resumeSeat(
+    relayUrl: string,
+    room: string,
+    args: { memberKey: string; sign: SignFn },
+  ): Promise<{ token: string }> {
+    const data = await postJson(`${relayUrl}/v1/rooms/${room}/resume`, {
+      member_key: args.memberKey,
+      ...(await resumeProof(room, args.sign)),
     });
     return { token: data.member_token as string };
   }
@@ -180,6 +200,10 @@ export class RelayClient {
         return;
       }
       case 'synced': {
+        if (f.more === true) {
+          ws.send(JSON.stringify({ t: 'sync', after: this.lastCursor }));
+          return;
+        }
         this.ready = true;
         this.attempt = 0;
         if (this.ackCursor > 0) ws.send(JSON.stringify({ t: 'ack', cursor: this.ackCursor }));

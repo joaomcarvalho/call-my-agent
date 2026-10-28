@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { base64urlEncode, generateSigningKey, sha256Hash } from '@cma/protocol';
+import { base64urlEncode, generateSigningKey, sha256Hash, signBytes } from '@cma/protocol';
 import { RelayClient, RelayError, RelayHttpError, startRelay, type RelayMsg } from '../src/index.ts';
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -62,11 +62,20 @@ function makeClient(url: string, room: string, token: string, cursor?: number): 
 }
 
 async function setup(url: string, ttlS = 3600) {
-  const a = generateSigningKey().keyId;
-  const b = generateSigningKey().keyId;
+  const ka = generateSigningKey();
+  const kb = generateSigningKey();
+  const a = ka.keyId;
+  const b = kb.keyId;
   const created = await RelayClient.createRoom(url, { secretHash, creatorKey: a, ttlS });
   const joined = await RelayClient.joinRoom(url, created.room, { secret, memberKey: b });
-  return { room: created.room, a, b, tokenA: created.token, tokenB: joined.token };
+  return {
+    room: created.room,
+    a,
+    b,
+    tokenA: created.token,
+    tokenB: joined.token,
+    signB: (bytes: Uint8Array) => signBytes(bytes, kb.secretKey),
+  };
 }
 
 async function pair(url: string) {
@@ -113,7 +122,7 @@ describe('T3 relay', () => {
 
     expect(await joinStatus(r.url, s.room, { secret, member_key: generateSigningKey().keyId })).toBe(409);
 
-    const again = await RelayClient.joinRoom(r.url, s.room, { secret, memberKey: s.b });
+    const again = await RelayClient.joinRoom(r.url, s.room, { secret, memberKey: s.b, sign: s.signB });
     expect(again.token).not.toBe(s.tokenB);
 
     expect(await joinStatus(r.url, 'rdoesnotexist0000', { secret, member_key: s.b })).toBe(404);
