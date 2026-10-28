@@ -1,12 +1,13 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { z } from 'zod';
-import { hashObject, isHash, sha256Hash } from './canonical.ts';
+import { canonicalString, hashObject, isHash, sha256Hash } from './canonical.ts';
 import { ChainTracker } from './chain.ts';
 import { verifyEnvelope } from './envelope.ts';
 import { isKeyId, verifyObject } from './keys.ts';
 import { applyProposal, checkPlan, planHash } from './plan.ts';
 import { markdownHash } from './render.ts';
+import { createPlanV0 } from './templates.ts';
 import type {
   Budgets,
   Charter,
@@ -37,6 +38,8 @@ export interface PendingProposal {
   type: 'propose' | 'counter' | 'amend';
   patch: JsonPatchOp[];
   kinds: DecisionKind[];
+  /** Whether proposer and accepter must cite a checkpoint answer (§2.6). */
+  checkpoint: boolean;
   resultHash: Hash;
   baseVersion: number;
 }
@@ -278,7 +281,7 @@ function joinProof(secret: Uint8Array, session: string): string {
   return bytesToHex(sha256(bytes));
 }
 
-function needsCheckpoint(charter: Charter, kinds: DecisionKind[]): boolean {
+function hasCheckpointKind(charter: Charter, kinds: DecisionKind[]): boolean {
   return kinds.some((kind) => charter.checkpoint_kinds.includes(kind));
 }
 
@@ -321,6 +324,10 @@ function checkDeadlock(r: ReplayResult, budgets: Budgets): void {
 
 type ProposalBody = Bodies['propose'];
 
+function checkpointReason(changedDecisions: string[], kinds: DecisionKind[]): string {
+  return changedDecisions.length > 0 ? `changing decisions ${changedDecisions.join(', ')}` : `kinds ${kinds.join(', ')}`;
+}
+
 /** §2.5/§2.6 checks shared by propose, counter and amend, evaluated against the current plan. */
 function checkProposal(
   c: Ctx,
@@ -337,8 +344,9 @@ function checkProposal(
   }
   const declared = new Set([...body.kinds, ...applied.effectiveKinds]);
   const kinds = DECISION_KINDS.filter((kind) => declared.has(kind));
-  if (needsCheckpoint(charter, kinds) && answerPosition(r, body.checkpoint_ref, c.party) < 0) {
-    return fail('CHECKPOINT_SKIPPED', `kinds ${kinds.join(', ')} need checkpoint_ref to an earlier user_answer_summary from ${c.party}`);
+  const checkpoint = applied.changedDecisions.length > 0 || hasCheckpointKind(charter, kinds);
+  if (checkpoint && answerPosition(r, body.checkpoint_ref, c.party) < 0) {
+    return fail('CHECKPOINT_SKIPPED', `${checkpointReason(applied.changedDecisions, kinds)} needs checkpoint_ref to an earlier user_answer_summary from ${c.party}`);
   }
   return {
     ok: true,
@@ -348,6 +356,7 @@ function checkProposal(
       type,
       patch: clone(body.patch) as JsonPatchOp[],
       kinds,
+      checkpoint,
       resultHash: applied.hash,
       baseVersion: r.version,
     },
@@ -392,6 +401,10 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
     if (c.party !== 'A' || r.state !== 'HANDSHAKE') return fail('INVALID_STATE', `welcome from ${c.party} in ${r.state}`);
     if (body.charter_hash !== r.charterHash) return fail('CHARTER_MISMATCH', 'welcome names a different charter');
     if (body.identity.agent_key !== c.env.from.agent_key) return fail('UNKNOWN_SENDER', 'identity.agent_key differs from the sender');
+    const ts = Date.parse(c.env.ts);
+    if (!(ts >= Date.parse(c.charter.created_at) && ts <= Date.parse(c.charter.expires_at))) {
+      return fail('INVALID_STATE', `welcome ts ${c.env.ts} is outside the charter's ${c.charter.created_at} to ${c.charter.expires_at}`);
+    }
     return accept(() => {
       r.state = 'DISCUSSING';
       r.floor = 'A';
@@ -481,8 +494,8 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
     if (pending && pending.id === body.proposal) {
       if (pending.from === c.party) return fail('INVALID_STATE', 'cannot accept your own proposal');
       if (body.result_hash !== pending.resultHash) return fail('STALE_BASE', `result is ${pending.resultHash}`);
-      if (needsCheckpoint(charter, pending.kinds) && answerPosition(r, body.checkpoint_ref, c.party) <= r.accepted.indexOf(pending.id)) {
-        return fail('CHECKPOINT_SKIPPED', `accepting ${pending.kinds.join(', ')} needs checkpoint_ref to a user_answer_summary from ${c.party} after the proposal`);
+      if (pending.checkpoint && answerPosition(r, body.checkpoint_ref, c.party) <= r.accepted.indexOf(pending.id)) {
+        return fail('CHECKPOINT_SKIPPED', `accepting this proposal needs checkpoint_ref to a user_answer_summary from ${c.party} after the proposal`);
       }
       const applied = applyProposal(r.plan!, pending.patch, pending.from, charter.budgets);
       if (!applied.ok || applied.hash !== pending.resultHash) return fail('STALE_BASE', 'proposal no longer applies');
@@ -600,6 +613,7 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
       ['mode', s.mode === charter.mode],
       ['charter_hash', s.charter_hash === r.charterHash],
       ['party', s.party === c.party],
+      ['human', s.human === r.identities[c.party]?.human],
       ['human_key', s.human_key === r.identities[c.party]?.human_key],
     ];
     const wrong = checks.find(([, ok]) => !ok);
@@ -734,11 +748,10 @@ function genesis(r: ReplayResult, env: Envelope): Verdict {
   const checked = checkPlan(plan_v0, charter.budgets.max_plan_bytes);
   if (!checked.ok) return fail(checked.code === 'TOO_LARGE' ? 'TOO_LARGE' : 'BAD_SCHEMA', `plan_v0: ${checked.detail}`);
   const plan = checked.plan;
-  if (plan_v0_hash !== planHash(plan)) return fail('CHARTER_MISMATCH', 'plan_v0_hash does not match plan_v0');
-  if (plan.version !== 0 || plan.parent !== null) return fail('CHARTER_MISMATCH', 'plan_v0 must be version 0 with no parent');
-  if (plan.meta.charter_hash !== charter_hash || plan.session !== charter.session) {
-    return fail('CHARTER_MISMATCH', 'plan_v0 belongs to a different charter');
+  if (canonicalString(plan) !== canonicalString(createPlanV0(charter, charter_hash, charter.invitee_label))) {
+    return fail('CHARTER_MISMATCH', 'plan_v0 is not the template plan of this charter');
   }
+  if (plan_v0_hash !== planHash(plan)) return fail('CHARTER_MISMATCH', 'plan_v0_hash does not match plan_v0');
   return accept(() => {
     r.charter = clone(charter);
     r.charterHash = charter_hash;
@@ -774,40 +787,79 @@ function evaluate(r: ReplayResult, charter: Charter, env: Envelope, opts: Replay
 
 type Outcome = { kind: 'accepted' } | { kind: 'ignored' } | { kind: 'rejected'; code: ErrorCode; detail: string };
 
-function claimedId(raw: unknown): Hash {
-  const id = typeof raw === 'object' && raw !== null ? (raw as { id?: unknown }).id : undefined;
-  if (isHash(id)) return id;
-  try {
-    return hashObject(raw);
-  } catch {
-    return sha256Hash(String(raw));
+export const MAX_ENVELOPE_DEPTH = 64;
+export const MAX_ENVELOPE_NODES = 20_000;
+
+/** Iterative walk that rejects values nested deeper than MAX_ENVELOPE_DEPTH or with more than MAX_ENVELOPE_NODES values. */
+function exceedsBounds(raw: unknown): string | null {
+  const stack: { value: unknown; depth: number }[] = [{ value: raw, depth: 1 }];
+  let nodes = 1;
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop()!;
+    if (typeof value !== 'object' || value === null) continue;
+    if (depth > MAX_ENVELOPE_DEPTH) return `envelope nests deeper than ${MAX_ENVELOPE_DEPTH} levels`;
+    const children = Array.isArray(value) ? value : Object.values(value);
+    nodes += children.length;
+    if (nodes > MAX_ENVELOPE_NODES) return `envelope has more than ${MAX_ENVELOPE_NODES} values`;
+    for (const child of children) stack.push({ value: child, depth: depth + 1 });
   }
+  return null;
+}
+
+/** The id to record a rejection under: the claimed id when it looks like one, else a hash of the entry when that is safe to compute. */
+function claimedId(raw: unknown, hashable: boolean): Hash {
+  try {
+    const id = typeof raw === 'object' && raw !== null ? (raw as { id?: unknown }).id : undefined;
+    if (isHash(id)) return id;
+    if (hashable) return hashObject(raw);
+  } catch {
+    // unreadable entry
+  }
+  return sha256Hash(`unidentifiable ${typeof raw}`);
 }
 
 function seen(r: ReplayResult, id: Hash): boolean {
   return r.accepted.includes(id) || r.rejected.some((x) => x.id === id && !UNVERIFIED.has(x.code));
 }
 
+function reject(r: ReplayResult, id: Hash, code: ErrorCode, detail: string): Outcome {
+  r.rejected.push({ id, code, detail });
+  return { kind: 'rejected', code, detail };
+}
+
 /** Applies one log entry to `r` in place. */
 function step(r: ReplayResult, raw: unknown, opts: ReplayOptions): Outcome {
+  const unbounded = exceedsBounds(raw);
+  if (unbounded) return reject(r, claimedId(raw, false), 'BAD_SCHEMA', unbounded);
   const verified = verifyEnvelope(raw);
-  if (!verified.ok) {
-    r.rejected.push({ id: claimedId(raw), code: verified.code, detail: verified.detail });
-    return { kind: 'rejected', code: verified.code, detail: verified.detail };
-  }
+  if (!verified.ok) return reject(r, claimedId(raw, true), verified.code, verified.detail);
   const env = verified.envelope;
   if (seen(r, env.id)) return { kind: 'ignored' };
   const verdict = r.charter === null ? genesis(r, env) : evaluate(r, r.charter, env, opts);
-  if (!verdict.ok) {
-    r.rejected.push({ id: env.id, code: verdict.code, detail: verdict.detail });
-    return { kind: 'rejected', code: verdict.code, detail: verdict.detail };
-  }
+  if (!verdict.ok) return reject(r, env.id, verdict.code, verdict.detail);
   r.lastSeq[env.from.party] = env.seq;
   r.lastId[env.from.party] = env.id;
   r.accepted.push(env.id);
   verdict.apply();
   checkDeadlock(r, r.charter!.budgets);
   return { kind: 'accepted' };
+}
+
+function errorMessage(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return 'unprintable error';
+  }
+}
+
+/** `step`, with any exception recorded as a BAD_SCHEMA rejection instead of escaping. */
+function safeStep(r: ReplayResult, raw: unknown, opts: ReplayOptions): Outcome {
+  try {
+    return step(r, raw, opts);
+  } catch (error) {
+    return reject(r, claimedId(raw, false), 'BAD_SCHEMA', `exception: ${errorMessage(error)}`);
+  }
 }
 
 function applyClock(r: ReplayResult, now: string | undefined): void {
@@ -823,7 +875,13 @@ function applyClock(r: ReplayResult, now: string | undefined): void {
 
 /** Relay order when every entry carries a relay_seq (stable for ties), otherwise the given order. */
 function relayOrder(log: Envelope[]): Envelope[] {
-  const seqs = log.map((entry) => (entry as { relay_seq?: unknown } | null)?.relay_seq);
+  const seqs = log.map((entry) => {
+    try {
+      return (entry as { relay_seq?: unknown } | null)?.relay_seq;
+    } catch {
+      return undefined;
+    }
+  });
   if (!seqs.every((seq) => typeof seq === 'number')) return [...log];
   return log
     .map((entry, index) => ({ entry, seq: seqs[index] as number }))
@@ -834,7 +892,7 @@ function relayOrder(log: Envelope[]): Envelope[] {
 /** Folds a session log into its state (§2.2). Invalid messages are recorded in `rejected`, never thrown. */
 export function replay(log: Envelope[], opts: ReplayOptions = {}): ReplayResult {
   const r = initialResult();
-  for (const entry of relayOrder(log)) step(r, entry, opts);
+  for (const entry of relayOrder(log)) safeStep(r, entry, opts);
   applyClock(r, opts.now);
   return r;
 }
@@ -847,7 +905,7 @@ export function validateNext(
 ): { ok: true } | { ok: false; code: ErrorCode; detail: string } {
   const r = clone(result);
   applyClock(r, opts.now);
-  const outcome = step(r, env, opts);
+  const outcome = safeStep(r, env, opts);
   if (outcome.kind === 'accepted') return { ok: true };
   if (outcome.kind === 'ignored') return { ok: false, code: 'CHAIN_DUPLICATE', detail: `${env.id} is already in the log` };
   return { ok: false, code: outcome.code, detail: outcome.detail };

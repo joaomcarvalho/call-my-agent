@@ -6,8 +6,8 @@ contract · version 2 · session `ses_fixture_orders_billing` · A: alice@orders
 
 | ID | Decision | Kind | Decided by | Decided in |
 | --- | --- | --- | --- | --- |
-| D2 | Responses include `total_count` so billing can detect truncated syncs. | — | agent-assumed | `sha256:34ad129485a1432eb1e84a26184421556cfc045fb2032ced31b03a61c8cffa99` |
-| D1 | List endpoints use opaque cursor pagination instead of offsets. | — | human-A | `sha256:34ad129485a1432eb1e84a26184421556cfc045fb2032ced31b03a61c8cffa99` |
+| D2 | Responses include `total_count` so billing can detect truncated syncs. | — | agent-assumed | `sha256:0f4cdff10084ce3ae07bf89ec6c7746e585cd7f1f3055d9950572cdc8358aeb5` |
+| D1 | List endpoints use opaque cursor pagination instead of offsets. | — | human-A | `sha256:0f4cdff10084ce3ae07bf89ec6c7746e585cd7f1f3055d9950572cdc8358aeb5` |
 | D3 | Rename `amount` to `amount_minor` (integer minor units). Breaking for existing consumers. | breaking_change | human-A | — |
 
 ## Context

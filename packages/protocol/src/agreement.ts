@@ -1,5 +1,6 @@
 import { canonicalString, hashObject, sha256Hash } from './canonical.ts';
 import { signObject, signingKeyFromSecret, verifyObject } from './keys.ts';
+import { PlanSchema } from './plan.ts';
 import { renderMarkdown } from './render.ts';
 import type { Charter, Hash, Identity, KeyId, Mode, Party, Plan, SignoffBody, SignoffStatement } from './types.ts';
 import { PARTIES, PROTOCOL_VERSION } from './types.ts';
@@ -76,6 +77,8 @@ const q = (value: string): string => JSON.stringify(value);
 /** Deterministic agreement file; byte-identical for both parties given the same inputs. */
 export function renderAgreementFile(input: AgreementInput): string {
   const { plan, charter, identities, signoffs } = input;
+  const valid = PlanSchema.safeParse(plan);
+  if (!valid.success) throw new Error(`plan is not a valid plan: ${schemaIssue(valid.error)}`);
   const body = renderMarkdown(plan);
   const planHash = hashObject(plan);
   const mdHash = sha256Hash(body);
@@ -125,9 +128,24 @@ export function renderAgreementFile(input: AgreementInput): string {
   return `${lines.join('\n')}${body}\n<!-- cma-plan\n${canonicalString(plan)}\n-->\n`;
 }
 
-export type AgreementVerdict =
-  | { ok: true; planHash: Hash; signers: Record<Party, { human: string; human_key: KeyId; signed_at: string }> }
-  | { ok: false; reason: string };
+export interface AgreementSigner {
+  human: string;
+  human_key: KeyId;
+  agent_key: KeyId;
+  signed_at: string;
+}
+
+export type AgreementVerdict = { ok: true; planHash: Hash; signers: Record<Party, AgreementSigner> } | { ok: false; reason: string };
+
+export interface AgreementExpectations {
+  /** Human keys the caller already trusts for each party; a file signed by any other key fails. */
+  humanKeys?: Partial<Record<Party, KeyId>>;
+}
+
+function schemaIssue(error: { issues: { path: (string | number)[]; message: string }[] }): string {
+  const issue = error.issues[0];
+  return issue ? `${issue.path.join('/')}: ${issue.message}` : 'invalid';
+}
 
 interface ParsedFrontMatter {
   session: string;
@@ -165,8 +183,11 @@ function parseFrontMatter(lines: string[]): ParsedFrontMatter {
   return out as unknown as ParsedFrontMatter;
 }
 
-/** Checks an agreement file: embedded plan, rendered body, both hashes and both human signatures. */
-export function verifyAgreementFile(text: string): AgreementVerdict {
+/**
+ * Checks an agreement file: embedded plan, rendered body, both hashes and both human signatures.
+ * Without `expected.humanKeys` the signatures only prove the file is self-consistent, not who signed it.
+ */
+export function verifyAgreementFile(text: string, expected: AgreementExpectations = {}): AgreementVerdict {
   const fmMatch = /^---\n([\s\S]*?)\n---\n/.exec(text);
   if (!fmMatch) return { ok: false, reason: 'missing front matter' };
   const tail = text.slice(fmMatch[0].length);
@@ -185,6 +206,8 @@ export function verifyAgreementFile(text: string): AgreementVerdict {
     return { ok: false, reason: `unparseable file: ${(err as Error).message}` };
   }
 
+  const valid = PlanSchema.safeParse(plan);
+  if (!valid.success) return { ok: false, reason: `embedded plan is not a valid plan: ${schemaIssue(valid.error)}` };
   const planHash = hashObject(plan);
   if (planJson !== canonicalString(plan)) return { ok: false, reason: 'embedded plan is not canonical JSON' };
   if (planHash !== fm.plan_hash) return { ok: false, reason: 'embedded plan does not match plan_hash' };
@@ -201,11 +224,13 @@ export function verifyAgreementFile(text: string): AgreementVerdict {
     return { ok: false, reason: 'front matter does not match the embedded plan' };
   }
 
-  const signers = {} as Record<Party, { human: string; human_key: KeyId; signed_at: string }>;
+  const signers = {} as Record<Party, AgreementSigner>;
   for (const party of PARTIES) {
     const who = fm.parties?.[party];
     const sig = fm.signoffs?.[party];
     if (!who || !sig) return { ok: false, reason: `missing party ${party}` };
+    const trusted = expected.humanKeys?.[party];
+    if (trusted !== undefined && who.human_key !== trusted) return { ok: false, reason: `unexpected key for party ${party}` };
     const statement: SignoffStatement = {
       v: PROTOCOL_VERSION,
       session: plan.session,
@@ -223,7 +248,7 @@ export function verifyAgreementFile(text: string): AgreementVerdict {
     if (!verifyObject(statement, sig.sig, who.human_key)) {
       return { ok: false, reason: `signature of party ${party} does not verify` };
     }
-    signers[party] = { human: who.human, human_key: who.human_key as KeyId, signed_at: sig.signed_at };
+    signers[party] = { human: who.human, human_key: who.human_key as KeyId, agent_key: who.agent_key as KeyId, signed_at: sig.signed_at };
   }
   return { ok: true, planHash, signers };
 }

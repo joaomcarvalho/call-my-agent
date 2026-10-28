@@ -41,7 +41,7 @@ describe('worked transcript', () => {
     expect(r.awaitingHuman).toEqual({ A: false, B: false });
     expect(r.checkpoints['cp-a-1']).toEqual({ party: 'A', askedIn: ids.ask_a!, answeredIn: ids.answer_a! });
     expect(r.checkpoints['cp-b-1']).toEqual({ party: 'B', askedIn: ids.ask_b!, answeredIn: ids.answer_b! });
-    expect(r.lastSeq).toEqual({ A: 11, B: 9 });
+    expect(r.lastSeq).toEqual({ A: 13, B: 13 });
     expect(r.lastId).toEqual({ A: ids.bye_a!, B: ids.bye_b! });
   });
 
