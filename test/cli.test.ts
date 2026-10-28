@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from '
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { inviteCode, verifySignoffSignature, type SignoffBody } from '../packages/protocol/src/index.ts';
+import { inviteCode, verifySignoffSignature, type SignoffBody } from '@cma/protocol';
 import { callPaths, identityPaths, readCallRecord } from '../plugin/server/store.ts';
 import { Harness, connect, freezeSimplePlan, status, waitFor, type Side } from '../plugin/test/fixtures/harness.ts';
 

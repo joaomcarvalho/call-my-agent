@@ -13,8 +13,8 @@ import {
   replay,
   verifyAgreementFile,
   type Party,
-} from '../packages/protocol/src/index.ts';
-import { startRelay } from '../packages/relay/src/index.ts';
+} from '@cma/protocol';
+import { startRelay } from '@cma/relay';
 import {
   callPaths,
   identityPaths,

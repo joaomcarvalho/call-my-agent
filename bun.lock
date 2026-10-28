@@ -3,6 +3,11 @@
   "workspaces": {
     "": {
       "name": "call-my-agent",
+      "dependencies": {
+        "@cma/plugin": "workspace:*",
+        "@cma/protocol": "workspace:*",
+        "@cma/relay": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "1.3.14",
         "typescript": "5.9.3",
