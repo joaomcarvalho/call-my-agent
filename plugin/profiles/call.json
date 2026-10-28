@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "mcp__plugin_call-my-agent_cma__*",
+      "Agent(call-my-agent:context-scout)"
+    ],
+    "deny": [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "SendMessage",
+      "Agent(general-purpose)",
+      "Agent(Explore)",
+      "Agent(Plan)",
+      "Read(./.env*)",
+      "Read(**/.env*)",
+      "Read(**/*.pem)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.call-my-agent/identity/**)",
+      "Read(~/.claude/plugins/data/**/identity/**)"
+    ]
+  }
+}

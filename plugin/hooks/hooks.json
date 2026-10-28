@@ -1,0 +1,28 @@
+{
+  "description": "call-my-agent: bind the session inbox socket and enforce the outbound disclosure policy",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/session-start.ts"]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_call-my-agent_cma__cma_(say|propose|respond|answer_checkpoint)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/disclosure.ts"]
+          }
+        ]
+      }
+    ]
+  }
+}
