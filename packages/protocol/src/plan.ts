@@ -168,6 +168,12 @@ function ownerViolation(before: Plan, after: Plan, by: Party): string | null {
       return `section ${id} is owned by ${other}`;
     }
   }
+  const decisions = byId(before.decisions);
+  for (const d of after.decisions) {
+    if (d.decided_by === `human-${other}` && !sameJson(decisions.get(d.id), d)) {
+      return `decision ${d.id} cannot be attributed to human-${other} by ${by}`;
+    }
+  }
   return null;
 }
 

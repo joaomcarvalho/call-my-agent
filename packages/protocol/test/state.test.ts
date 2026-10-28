@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { sha256Hash } from '../src/canonical.ts';
 import { planHash } from '../src/plan.ts';
 import { replay, validateNext } from '../src/state.ts';
-import type { Envelope, JsonPatchOp } from '../src/types.ts';
+import type { Decision, Envelope, JsonPatchOp } from '../src/types.ts';
 import { deliver, expectAccepted, expectAgreement, expectRejected, withoutRejections, type Outcome } from './fixtures/deliver.ts';
 import {
   EXPIRES_AT,
@@ -17,6 +17,10 @@ import {
 } from './fixtures/transcript.ts';
 
 const at = (step: WorkedStep) => workedTranscript(step);
+
+function decision(id: string, decided_by: Decision['decided_by']): Decision {
+  return { id, text: `decision ${id}`, decided_by, decided_in: null };
+}
 
 function contextPatch(version: number, text: string): JsonPatchOp[] {
   return [versionTest(version), { op: 'replace', path: '/sections/0/md', value: text }];
@@ -101,8 +105,13 @@ const SCENARIOS: Record<string, () => Scenario> = {
     return { t, env: t.propose('B', cursorPatch()), expect: 'RECREATES_REJECTED' };
   },
   'countering with the countered result': () => {
-    const { t } = at('propose');
-    return { t, env: t.counter('A', cursorPatch()), expect: 'RECREATES_REJECTED' };
+    const { t } = at('say');
+    expectAccepted(t, t.propose('B', contextPatch(0, 'same')));
+    return { t, env: t.counter('A', contextPatch(0, 'same')), expect: 'RECREATES_REJECTED' };
+  },
+  'A attributing a decision to human-B': () => {
+    const { t } = at('welcome');
+    return { t, env: t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-B') }]), expect: 'OWNER_VIOLATION' };
   },
   'accept with the wrong result_hash': () => {
     const { t } = at('propose');
@@ -391,6 +400,24 @@ describe('AC6: proposal rules', () => {
   });
 });
 
+describe('decision attribution', () => {
+  test('a party cannot attribute a decision to the other human', () => {
+    run('A attributing a decision to human-B');
+  });
+
+  test('a party may record a decision by its own human', () => {
+    const { t } = at('welcome');
+    expectAccepted(t, t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-A') }]));
+  });
+
+  test('the peer may accept a decision attributed to the proposer’s human', () => {
+    const { t } = at('welcome');
+    expectAccepted(t, t.propose('A', [versionTest(0), { op: 'add', path: '/decisions/-', value: decision('D9', 'human-A') }]));
+    expectAccepted(t, t.accept('B'));
+    expect(t.state().plan?.decisions).toEqual([decision('D9', 'human-A')]);
+  });
+});
+
 describe('AC7: computed checkpoints', () => {
   test('AC7: proposing a breaking_change decision without checkpoint_ref is rejected CHECKPOINT_SKIPPED', () => {
     run('breaking change proposed without checkpoint_ref');
@@ -568,10 +595,21 @@ describe('AC9: termination', () => {
     expect(replay(t.log, { ...t.opts, now: '2026-10-29T14:00:00.000Z' }).state).toBe('INVITED');
   });
 
-  test('opts.now past created_at + ttl_s expires an open session', () => {
-    const { t } = at('welcome');
-    expect(replay(t.log, { ...t.opts, now: '2026-10-28T16:00:00.000Z' }).state).toBe('DISCUSSING');
-    expect(replay(t.log, { ...t.opts, now: '2026-10-28T16:00:00.001Z' }).state).toBe('EXPIRED');
+  test('HANDSHAKE expires at expires_at', () => {
+    const { t } = at('hello');
+    expect(replay(t.log, { ...t.opts, now: '2026-10-30T14:00:00.000Z' }).state).toBe('HANDSHAKE');
+    expect(replay(t.log, { ...t.opts, now: '2026-10-31T14:00:00.001Z' }).state).toBe('EXPIRED');
+  });
+
+  test('an open session expires ttl_s after the welcome, not after created_at', () => {
+    const { t } = at('hello');
+    const welcomedAt = '2026-10-29T00:00:00.000Z';
+    expectAccepted(t, t.welcome({ ts: welcomedAt }));
+    expect(t.state().welcomedAt).toBe(welcomedAt);
+    expect(t.charter.budgets.ttl_s).toBe(7200);
+    expect(replay(t.log, { ...t.opts, now: '2026-10-29T01:00:00.000Z' }).state).toBe('DISCUSSING');
+    expect(replay(t.log, { ...t.opts, now: '2026-10-29T02:00:00.000Z' }).state).toBe('DISCUSSING');
+    expect(replay(t.log, { ...t.opts, now: '2026-10-29T02:00:01.000Z' }).state).toBe('EXPIRED');
   });
 
   test('a closed session stays CLOSED however late it is replayed', () => {
@@ -583,7 +621,7 @@ describe('AC9: termination', () => {
 
   test('validateNext rejects every message once opts.now is past expiry', () => {
     const { t } = at('welcome');
-    const now = '2026-10-28T16:00:01.000Z';
+    const now = new Date(Date.parse(t.state().welcomedAt!) + (t.charter.budgets.ttl_s + 1) * 1000).toISOString();
     const env = t.say('A', 'too late');
     expect(validateNext(replay(t.log, { ...t.opts, now }), env, { ...t.opts, now })).toMatchObject({ ok: false, code: 'INVALID_STATE' });
     expect(validateNext(t.state(), env, { ...t.opts, now })).toMatchObject({ ok: false, code: 'INVALID_STATE' });

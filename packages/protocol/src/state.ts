@@ -72,6 +72,8 @@ export interface ReplayResult {
   /** for building the next envelope */
   lastSeq: Record<Party, number>;
   lastId: Record<Party, Hash | null>;
+  /** `ts` of the accepted welcome; open states expire `budgets.ttl_s` after it. */
+  welcomedAt: string | null;
 }
 
 // ---------------------------------------------------------------- schemas
@@ -393,6 +395,7 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
     return accept(() => {
       r.state = 'DISCUSSING';
       r.floor = 'A';
+      r.welcomedAt = c.env.ts;
     });
   },
 
@@ -713,6 +716,7 @@ function initialResult(): ReplayResult {
     rejected: [],
     lastSeq: { A: 0, B: 0 },
     lastId: { A: null, B: null },
+    welcomedAt: null,
   };
 }
 
@@ -810,9 +814,9 @@ function applyClock(r: ReplayResult, now: string | undefined): void {
   if (now === undefined || r.charter === null) return;
   const at = Date.parse(now);
   if (Number.isNaN(at)) throw new RangeError(`opts.now is not an ISO-8601 time: ${now}`);
-  if (r.state === 'INVITED') {
+  if (r.state === 'INVITED' || r.state === 'HANDSHAKE') {
     if (at > Date.parse(r.charter.expires_at)) r.state = 'EXPIRED';
-  } else if (isOpen(r.state) && at > Date.parse(r.charter.created_at) + r.charter.budgets.ttl_s * 1000) {
+  } else if (isOpen(r.state) && r.welcomedAt !== null && at > Date.parse(r.welcomedAt) + r.charter.budgets.ttl_s * 1000) {
     r.state = 'EXPIRED';
   }
 }

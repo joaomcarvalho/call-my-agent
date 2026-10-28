@@ -202,6 +202,36 @@ describe('applyProposal', () => {
     expect(apply([versionTest(0), { op: 'move', from: '/sections/2', path: '/sections/0' }], 'B').ok).toBe(true);
   });
 
+  test('a party cannot add or change a decision attributed to the other human', () => {
+    const add = (decided_by: Decision['decided_by']): JsonPatchOp[] => [
+      versionTest(0),
+      { op: 'add', path: '/decisions/-', value: { id: 'D9', text: 'x', decided_by, decided_in: null } },
+    ];
+    expectCode(apply(add('human-B'), 'A'), 'OWNER_VIOLATION');
+    expectCode(apply(add('human-A'), 'B'), 'OWNER_VIOLATION');
+    const base = withDecisions([
+      { id: 'D1', text: 'theirs', decided_by: 'human-B', decided_in: null },
+      { id: 'D2', text: 'assumed', decided_by: 'agent-assumed', decided_in: null },
+    ]);
+    expectCode(apply([versionTest(0), { op: 'replace', path: '/decisions/0/text', value: 'edited' }], 'A', base), 'OWNER_VIOLATION');
+    expectCode(apply([versionTest(0), { op: 'replace', path: '/decisions/1/decided_by', value: 'human-B' }], 'A', base), 'OWNER_VIOLATION');
+  });
+
+  test('a party may record its own human’s decisions and leave the other human’s untouched', () => {
+    const base = withDecisions([{ id: 'D1', text: 'theirs', decided_by: 'human-B', decided_in: null }]);
+    const result = apply(
+      [
+        versionTest(0),
+        { op: 'add', path: '/decisions/-', value: { id: 'D2', text: 'mine', decided_by: 'human-A', decided_in: null } },
+        { op: 'add', path: '/decisions/-', value: { id: 'D3', text: 'assumed', decided_by: 'agent-assumed', decided_in: null } },
+        { op: 'replace', path: '/sections/0/md', value: 'context' },
+      ],
+      'A',
+      base,
+    );
+    expect(codeOf(result)).toBe('ok');
+  });
+
   test('effectiveKinds are the kinds of added, changed and removed decisions in canonical order', () => {
     const base = withDecisions([
       { id: 'D1', text: 'keep', kind: 'security_or_pii', decided_by: 'human-A', decided_in: null },

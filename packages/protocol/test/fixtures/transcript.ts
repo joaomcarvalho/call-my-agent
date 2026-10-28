@@ -94,6 +94,7 @@ export interface EnvelopeOverrides {
   signer?: SigningKeyPair;
   agentKey?: KeyId;
   session?: string;
+  ts?: string;
 }
 
 export interface ProposalOptions {
@@ -152,7 +153,7 @@ export class Transcript {
         seq: o.seq ?? r.lastSeq[party] + 1,
         prev: o.prev !== undefined ? o.prev : r.lastId[party],
         ack: { A: r.lastSeq.A, B: r.lastSeq.B },
-        ts: new Date(Date.parse(CREATED_AT) + (this.log.length + 1) * 1000).toISOString(),
+        ts: o.ts ?? new Date(Date.parse(CREATED_AT) + (this.log.length + 1) * 1000).toISOString(),
         type,
         body: body as Record<string, unknown>,
       },
@@ -173,8 +174,8 @@ export class Transcript {
     });
   }
 
-  welcome(): Envelope {
-    return this.envelope('A', 'welcome', { charter_hash: this.charterHash, identity: IDENTITY_A });
+  welcome(o?: EnvelopeOverrides): Envelope {
+    return this.envelope('A', 'welcome', { charter_hash: this.charterHash, identity: IDENTITY_A }, o);
   }
 
   say(party: Party, text: string, o?: EnvelopeOverrides): Envelope {
@@ -366,9 +367,9 @@ export function cursorPatch(): JsonPatchOp[] {
   ];
 }
 
-/** A's counter: the same plus `total_count` and the OpenAPI fragment. No checkpoint kinds. */
+/** A's counter: the same plus `total_count` and the OpenAPI fragment, with D1 settled by A's human. No checkpoint kinds. */
 export function totalCountPatch(): JsonPatchOp[] {
-  const [test, context, , d1, oi1] = cursorPatch();
+  const [test, context, , , oi1] = cursorPatch();
   return [
     test!,
     context!,
@@ -378,7 +379,7 @@ export function totalCountPatch(): JsonPatchOp[] {
       value: '`GET /v1/orders` pages with an opaque `cursor`; responses carry `next_cursor` (null on the last page) and `total_count`.',
     },
     { op: 'add', path: '/sections/1/artifacts', value: [artifact('orders-list', 'openapi-3.1', OPENAPI_V1)] },
-    d1!,
+    { op: 'add', path: '/decisions/-', value: { id: 'D1', text: 'List endpoints use opaque cursor pagination instead of offsets.', decided_by: 'human-A', decided_in: null } },
     { op: 'add', path: '/decisions/-', value: { id: 'D2', text: 'Responses include `total_count` so billing can detect truncated syncs.', decided_by: 'agent-assumed', decided_in: null } },
     oi1!,
   ];
