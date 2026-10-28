@@ -1,0 +1,140 @@
+openapi: 3.1.0
+info:
+  title: Orders API
+  version: 2.0.0
+  description: Order management API owned by the Orders team.
+servers:
+  - url: https://orders.internal.example.com
+paths:
+  /v2/orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: A page of orders.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderList"
+    post:
+      operationId: createOrder
+      summary: Create an order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: The created order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: Invalid order payload.
+components:
+  schemas:
+    Order:
+      type: object
+      required:
+        - id
+        - status
+        - created_at
+        - amount_cents
+        - currency
+        - customer_id
+        - ship_to
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum:
+            - pending
+            - paid
+            - shipped
+            - cancelled
+        created_at:
+          type: string
+          format: date-time
+        amount_cents:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        customer_id:
+          type: string
+        customer_phone:
+          type: [string, "null"]
+        ship_to:
+          $ref: "#/components/schemas/ShipTo"
+    ShipTo:
+      type: object
+      required:
+        - line1
+        - city
+        - postal_code
+        - country
+      properties:
+        line1:
+          type: string
+        city:
+          type: string
+        postal_code:
+          type: string
+        country:
+          type: string
+          pattern: "^[A-Z]{2}$"
+    OrderList:
+      type: object
+      required:
+        - data
+        - total_count
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+        total_count:
+          type: integer
+          minimum: 0
+    CreateOrderRequest:
+      type: object
+      required:
+        - customer_id
+        - amount_cents
+        - currency
+        - ship_to
+      properties:
+        customer_id:
+          type: string
+        customer_phone:
+          type: string
+        amount_cents:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        ship_to:
+          $ref: "#/components/schemas/ShipTo"
