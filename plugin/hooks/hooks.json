@@ -14,7 +14,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__plugin_call-my-agent_cma__cma_(say|propose|respond|answer_checkpoint)",
+        "matcher": "^mcp__plugin_call-my-agent_cma__cma_(say|propose|respond|answer_checkpoint|checkpoint|hangup|start_call)$",
         "hooks": [
           {
             "type": "command",

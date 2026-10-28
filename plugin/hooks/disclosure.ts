@@ -42,6 +42,13 @@ function shannon(s: string): number {
   return h;
 }
 
+const MAX_DEPTH = 64;
+const MAX_NODES = 20_000;
+const HASH_KEYS = new Set(['hash', 'result_hash', 'checkpoint_ref', 'proposal', 'sha256', 'charter_hash']);
+const FORMAT_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+const PREFIXED_HASH = /sha256:[0-9a-f]{64}(?![0-9a-f])/gi;
+const SPACED_OUT = /(?:\S[ \t]){7,}\S/g;
+
 function highEntropyToken(text: string): boolean {
   for (const m of text.matchAll(/[A-Za-z0-9+/_=-]{32,}/g)) {
     const t = m[0];
@@ -52,28 +59,82 @@ function highEntropyToken(text: string): boolean {
   return false;
 }
 
-function collectStrings(value: unknown, out: string[]): void {
-  if (typeof value === 'string') out.push(value);
-  else if (Array.isArray(value)) for (const v of value) collectStrings(v, out);
-  else if (value && typeof value === 'object') {
-    for (const [k, v] of Object.entries(value)) {
-      out.push(k);
-      collectStrings(v, out);
+function normalize(s: string): string {
+  return s.normalize('NFKC').replace(FORMAT_CHARS, '').replace(PREFIXED_HASH, ' ');
+}
+
+interface Collected {
+  raw: string[];
+  values: string[];
+  joinable: string[];
+  overflow: boolean;
+}
+
+/** Iteratively gathers every string, number and object key; hash-field values are skipped. */
+function collect(root: unknown): Collected {
+  const out: Collected = { raw: [], values: [], joinable: [], overflow: false };
+  const stack: Array<{ v: unknown; depth: number; key?: string }> = [{ v: root, depth: 0 }];
+  let nodes = 0;
+  while (stack.length > 0) {
+    const { v, depth, key } = stack.pop() as { v: unknown; depth: number; key?: string };
+    if (++nodes > MAX_NODES || depth > MAX_DEPTH) {
+      out.overflow = true;
+      return out;
+    }
+    if (typeof v === 'string') {
+      out.raw.push(v);
+      if (key !== undefined && HASH_KEYS.has(key) && /^(?:sha256:)?[0-9a-f]{64}$/i.test(v)) continue;
+      const n = normalize(v);
+      out.values.push(n);
+      out.joinable.push(n);
+    } else if (typeof v === 'number' || typeof v === 'bigint') {
+      out.values.push(String(v));
+      out.joinable.push(String(v));
+    } else if (Array.isArray(v)) {
+      for (let i = v.length - 1; i >= 0; i--) stack.push({ v: v[i], depth: depth + 1, key });
+    } else if (v && typeof v === 'object') {
+      const entries = Object.entries(v);
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const [k, child] = entries[i] as [string, unknown];
+        stack.push({ v: child, depth: depth + 1, key: k });
+        stack.push({ v: k, depth: depth + 1 });
+      }
     }
   }
+  return out;
+}
+
+// Adjacent fields run together without word boundaries, so the joined views use boundary-free rules.
+const UNBOUNDED_RULES: Rule[] = RULES.map((r) => ({ name: r.name, re: new RegExp(r.re.source.replaceAll('\\b', ''), r.re.flags) }));
+
+function scanText(text: string, reasons: Set<string>, joined = false): void {
+  for (const rule of joined ? UNBOUNDED_RULES : RULES) {
+    if (rule.re.test(text)) reasons.add(rule.name);
+  }
+  if (!joined && highEntropyToken(text)) reasons.add('high-entropy-string');
+  if (/[0-9a-fA-F]{40,}/.test(text)) reasons.add('long-hex-string');
+  if (/[0-9]{24,}/.test(text)) reasons.add('long-digit-run');
 }
 
 export function scan(toolInput: unknown): string[] {
-  const strings: string[] = [];
-  collectStrings(toolInput, strings);
   const reasons = new Set<string>();
-  for (const s of strings) {
-    if (Buffer.byteLength(s, 'utf8') > MAX_FIELD_BYTES) reasons.add(`a text field is larger than ${MAX_FIELD_BYTES / 1024} KB`);
-    for (const rule of RULES) {
-      if (rule.re.test(s)) reasons.add(rule.name);
-    }
-    if (highEntropyToken(s)) reasons.add('high-entropy-string');
+  const { raw, values, joinable, overflow } = collect(toolInput);
+  if (overflow) {
+    reasons.add(`input nested deeper than ${MAX_DEPTH} or larger than ${MAX_NODES} nodes`);
+    return [...reasons];
   }
+  for (const s of raw) {
+    if (Buffer.byteLength(s, 'utf8') > MAX_FIELD_BYTES) reasons.add(`a text field is larger than ${MAX_FIELD_BYTES / 1024} KB`);
+  }
+  const despaced = (v: string) => v.replace(SPACED_OUT, (m) => m.replace(/[ \t]/g, ''));
+  for (const v of values) {
+    scanText(v, reasons);
+    scanText(despaced(v), reasons);
+  }
+  // Joined views catch secrets split across fields; generic entropy would only flag adjacent prose.
+  const collapsed = joinable.map(despaced);
+  scanText(collapsed.join('\n'), reasons, true);
+  scanText(collapsed.join(''), reasons, true);
   return [...reasons];
 }
 
@@ -84,23 +145,32 @@ function audit(session: unknown, record: Record<string, unknown>): void {
   appendFileSync(join(dir, 'audit.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), kind: 'hook_verdict', hook: 'disclosure', ...record })}\n`);
 }
 
-if (import.meta.main) {
-  let input: { tool_name?: string; tool_input?: Record<string, unknown> };
-  try {
-    input = JSON.parse(await Bun.stdin.text());
-  } catch {
-    console.error('call-my-agent disclosure check: hook input was not valid JSON; blocking the send.');
-    process.exit(2);
-  }
+function block(message: string): never {
+  console.error(message);
+  process.exit(2);
+}
+
+async function main(): Promise<void> {
+  const input = JSON.parse(await Bun.stdin.text()) as { tool_name?: string; tool_input?: Record<string, unknown> };
   const toolInput = input.tool_input ?? {};
   const reasons = scan(toolInput);
   const tool = input.tool_name ?? 'unknown';
   if (reasons.length > 0) {
     audit(toolInput.session, { tool, verdict: 'block', reasons });
-    console.error(
+    block(
       `Blocked by the call-my-agent disclosure policy: ${reasons.join(', ')}. Remove the sensitive or oversized content and send a short summary with a file:line reference instead. If it is needed, raise a checkpoint with your human; secrets can never be sent.`,
     );
-    process.exit(2);
   }
   audit(toolInput.session, { tool, verdict: 'allow' });
+}
+
+if (import.meta.main) {
+  // Claude Code treats exit 1 as non-blocking, so every failure path must exit 2.
+  process.on('uncaughtException', () => process.exit(2));
+  process.on('unhandledRejection', () => process.exit(2));
+  try {
+    await main();
+  } catch (err) {
+    block(`call-my-agent disclosure check failed (${err instanceof Error ? err.message : 'unknown error'}); blocking the send.`);
+  }
 }

@@ -132,6 +132,100 @@ describe('disclosure hook allows (exit 0)', () => {
   });
 });
 
+const GH = `${'ghp_'}aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5`;
+const AWS = `${'AKIA'}IOSFODNN7EXAMPLE`;
+const PREFIX = 'mcp__plugin_call-my-agent_cma__';
+
+describe('disclosure hook scan bypasses are blocked', () => {
+  test('blocks a 64-char hex secret', async () => {
+    const r = await disclose({ session: 's1', text: 'the signing key is 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' });
+    expect(r.code).toBe(2);
+  });
+
+  test('blocks a 64-char hex secret under an unrelated key', async () => {
+    expect((await disclose({ session: 's1', note: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' })).code).toBe(2);
+  });
+
+  test('blocks a key split with a zero-width space', async () => {
+    expect((await disclose({ session: 's1', text: `${AWS.slice(0, 10)}​${AWS.slice(10)}` })).code).toBe(2);
+  });
+
+  test('blocks a token spelled with spaces between characters', async () => {
+    expect((await disclose({ session: 's1', text: GH.split('').join(' ') })).code).toBe(2);
+  });
+
+  test('blocks fullwidth-letter token variants via NFKC', async () => {
+    const wide = [...AWS].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join('');
+    expect((await disclose({ session: 's1', text: wide })).code).toBe(2);
+  });
+
+  test('blocks a secret split across two fields', async () => {
+    expect((await disclose({ session: 's1', text: GH.slice(0, 20), rationale: GH.slice(20) })).code).toBe(2);
+  });
+
+  test('blocks a secret encoded as char codes in a patch value', async () => {
+    const patch = [{ op: 'test', path: '/x', value: [...GH].map((c) => c.charCodeAt(0)) }];
+    expect((await disclose({ session: 's1', patch })).code).toBe(2);
+  });
+
+  test('blocks a secret placed in an object key', async () => {
+    expect((await disclose({ session: 's1', patch: [{ op: 'add', path: '/x', value: { [GH]: 1 } }] })).code).toBe(2);
+  });
+});
+
+describe('disclosure hook fails closed', () => {
+  test('exits 2 for a deeply nested tool_input', async () => {
+    const deep = '['.repeat(60000) + ']'.repeat(60000);
+    const stdin = `{"tool_name":"${PREFIX}cma_propose","tool_input":{"session":"s","rationale":"${GH}","patch":[{"op":"test","path":"/x","value":${deep}}]}}`;
+    const r = await run('disclosure.ts', { stdin, env: { CMA_HOME: '/nonexistent-cma' } });
+    expect(r.code).toBe(2);
+  });
+
+  test('exits 2 for input nested past 64 levels', async () => {
+    const deep = '['.repeat(70) + ']'.repeat(70);
+    expect((await run('disclosure.ts', { stdin: `{"tool_name":"${TOOL}","tool_input":{"v":${deep}}}` })).code).toBe(2);
+  });
+
+  test('exits 2 for more than 20000 nodes', async () => {
+    expect((await disclose({ session: 's1', list: Array.from({ length: 20001 }, () => 1) })).code).toBe(2);
+  });
+
+  test('exits 2 when the audit log cannot be written', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cma-ro-'));
+    mkdirSync(join(home, 'calls', 'sess-2', 'audit.jsonl'), { recursive: true });
+    expect((await disclose({ session: 'sess-2', text: 'fine' }, { CMA_HOME: home })).code).toBe(2);
+  });
+
+  test('exits 2 when the hook input is JSON null', async () => {
+    expect((await run('disclosure.ts', { stdin: 'null' })).code).toBe(2);
+  });
+});
+
+describe('disclosure hook allows hashes in hash fields', () => {
+  test('allows 64-hex values under checkpoint_ref and result_hash and an inline sha256 hash', async () => {
+    const h = 'ab12'.repeat(16);
+    const r = await disclose({ session: 's1', checkpoint_ref: h, nested: { result_hash: h }, text: `see sha256:${h} in the plan` });
+    expect(r.code).toBe(0);
+  });
+});
+
+describe('hooks.json matcher', () => {
+  const hooks = JSON.parse(readFileSync(join(hooksDir, 'hooks.json'), 'utf8'));
+  const re = new RegExp(hooks.hooks.PreToolUse[0].matcher);
+  const covered = ['say', 'propose', 'respond', 'answer_checkpoint', 'checkpoint', 'hangup', 'start_call'];
+  const others = ['inspect_invite', 'join_call', 'withdraw', 'request_signoff', 'plan_get', 'status', 'list_calls', 'wait', 'inbox', 'write_plan'];
+
+  test('matches every tool that sends text to the peer', () => {
+    for (const t of covered) expect(re.test(`${PREFIX}cma_${t}`)).toBe(true);
+  });
+
+  test('matches no other cma tool or look-alike name', () => {
+    for (const t of others) expect(re.test(`${PREFIX}cma_${t}`)).toBe(false);
+    expect(re.test(`${PREFIX}cma_say_more`)).toBe(false);
+    expect(re.test(`x${PREFIX}cma_say`)).toBe(false);
+  });
+});
+
 describe('disclosure hook audit', () => {
   test('appends block and allow verdicts to the call audit log without the secret', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cma-audit-'));
