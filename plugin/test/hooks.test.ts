@@ -207,6 +207,13 @@ describe('disclosure hook allows hashes in hash fields', () => {
     const r = await disclose({ session: 's1', checkpoint_ref: h, nested: { result_hash: h }, text: `see sha256:${h} in the plan` });
     expect(r.code).toBe(0);
   });
+
+  test('allows a full git commit SHA under evidence commit but not in prose', async () => {
+    const sha = '3f9a1c2e'.repeat(5);
+    const ok = await disclose({ session: 's1', text: 'see the handler', evidence: [{ ref: 'src/routes/orders.js:42', commit: sha }] });
+    expect(ok.code).toBe(0);
+    expect((await disclose({ session: 's1', text: `read at ${sha}` })).code).toBe(2);
+  });
 });
 
 describe('hooks.json matcher', () => {

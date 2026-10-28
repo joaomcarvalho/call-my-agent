@@ -84,6 +84,7 @@ function collect(root: unknown): Collected {
     if (typeof v === 'string') {
       out.raw.push(v);
       if (key !== undefined && HASH_KEYS.has(key) && /^(?:sha256:)?[0-9a-f]{64}$/i.test(v)) continue;
+      if (key === 'commit' && /^[0-9a-f]{40}$/i.test(v)) continue;
       const n = normalize(v);
       out.values.push(n);
       out.joinable.push(n);
