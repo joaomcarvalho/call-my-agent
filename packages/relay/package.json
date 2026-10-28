@@ -1,0 +1,12 @@
+{
+  "name": "@cma/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts", "./client": "./src/client.ts" },
+  "dependencies": {
+    "@cma/protocol": "workspace:*",
+    "zod": "3.25.76"
+  }
+}
