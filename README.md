@@ -78,7 +78,7 @@ Anyone can check an agreement file:
 cma verify docs/agreements/2026-10-28-orders-api-v2.md --expect A=ed25519:… --expect B=ed25519:…
 ```
 
-Other commands: `cma log CMA-XXXX-XXXX` prints the decrypted conversation; `cma invite CMA-XXXX-XXXX` prints a call's full invite again; `cma calls` lists calls and their state; `/call-my-agent:hangup` ends a call without agreement.
+Other commands: `cma log CMA-XXXX-XXXX` prints the decrypted conversation; `cma invite CMA-XXXX-XXXX` prints a call's full invite again; `cma calls` lists calls and their state; `/call-my-agent:hangup` ends a call without agreement; `cma eval <agreement.md>` scores a call on the example repos against its planted conflicts ([evals/](evals/README.md)).
 
 ## How it is protected
 
@@ -101,8 +101,9 @@ Known limits of v0.1: identities are self-asserted (no GitHub/OIDC yet), one rel
 packages/protocol   CMA/0.1: envelopes, hash chain, plan + JSON Patch reducer, renderer, replay state machine, E2EE, invites, agreement files
 packages/relay      Bun + SQLite relay and client
 plugin/             Claude Code plugin: MCP server, skills, hooks, call profile
-bin/cma             CLI: keygen, session, approve, verify, relay, calls
+bin/cma             CLI: keygen, session, approve, verify, eval, relay, calls
 examples/           orders-service and billing-service with planted contract conflicts
+evals/              scenario rubrics and the scorer behind `cma eval`
 docs/tasks/         the task cards the implementation was built from
 ```
 
