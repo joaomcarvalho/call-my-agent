@@ -39,7 +39,7 @@ import {
   type Party,
   type RejectReason,
 } from '@cma/protocol';
-import { RelayClient, RelayHttpError, type RelayMsg } from '@cma/relay';
+import { assertSecureRelayUrl, RelayClient, RelayHttpError, type RelayMsg } from '@cma/relay';
 import { CallRuntime, ToolError, agentSigner, errorText, type RuntimeHooks } from './call.ts';
 import { badge, fenceInvite, fencePlan, floorLabel, formatInjection, messageLine, sanitizeLabel, type InjectionHeader } from './format.ts';
 import { Inbox, wakeOf, type InboxItem } from './inbox.ts';
@@ -176,6 +176,11 @@ function parseInvite(text: string): Invite {
     throw new ToolError('BAD_INVITE', 'the relay is not a URL');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new ToolError('BAD_INVITE', 'the relay must be an http(s) URL');
+  try {
+    assertSecureRelayUrl(invite.relay);
+  } catch (err) {
+    throw new ToolError('BAD_INVITE', errorText(err));
+  }
   return invite;
 }
 
@@ -302,6 +307,11 @@ export class CallManager {
     this.guard();
     const limit = charterLimitProblem({ topic: input.topic, invitee_label: input.peer, share_set: input.share_set ?? [] });
     if (limit) throw new ToolError('BAD_INVITE', `the peer would refuse this invite: ${limit}`);
+    try {
+      assertSecureRelayUrl(this.relayUrl);
+    } catch (err) {
+      throw new ToolError('RELAY_UNAVAILABLE', errorText(err));
+    }
     const id = this.identity();
     const type = input.type ?? 'contract';
     const mode = input.mode ?? 'org';

@@ -32,6 +32,8 @@ Both engineers need the repo checked out. One of them runs a relay the other can
 cma relay --port 8787            # prints the URL; set CMA_RELAY_URL if it isn't http://127.0.0.1:8787
 ```
 
+A relay that is not on loopback must be served over https; plain `http://` to another host is refused unless `CMA_ALLOW_INSECURE_RELAY=1` is set (for a tailnet). [deploy/relay/README.md](deploy/relay/README.md) has copy-paste setups for Tailscale, Fly.io, and a VPS behind Caddy, plus the Dockerfile.
+
 Each engineer, once:
 
 ```bash
