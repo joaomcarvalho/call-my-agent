@@ -232,4 +232,33 @@ describe('session', () => {
       expect(run.stderr).toContain('refusing');
     }
   });
+
+  const ID = '123e4567-e89b-12d3-a456-426614174000';
+  for (const [from, forkArgv] of [
+    ['last', '--continue --fork-session'],
+    ['pick', '--resume --fork-session'],
+    [ID, `--resume ${ID} --fork-session`],
+  ] as const) {
+    test(`session --from ${from === ID ? '<uuid>' : from} prints the fork arguments before pass-through args`, async () => {
+      const run = await cma(['session', tmp(), '--home', tmp(), '--from', from, '--', '--model', 'x']);
+      expect(run.code).toBe(0);
+      expect(run.stdout).toContain(` ${forkArgv} --model x`);
+    });
+  }
+
+  test('session --from with an invalid id exits 1', async () => {
+    const run = await cma(['session', tmp(), '--home', tmp(), '--from', 'not-a-uuid']);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain('--from');
+  });
+
+  test('session --from --exec spawns claude with the fork arguments', async () => {
+    const bin = tmp();
+    const seen = join(bin, 'seen-args');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${seen}'\n`, { mode: 0o755 });
+    const run = await cma(['session', tmp(), '--exec', '--home', tmp(), '--from', ID], { PATH: `${bin}:${process.env.PATH ?? ''}` });
+    expect(run.code).toBe(0);
+    const args = readFileSync(seen, 'utf8').split('\n');
+    expect(args.slice(args.indexOf('--resume'))).toEqual(['--resume', ID, '--fork-session', '']);
+  });
 });
