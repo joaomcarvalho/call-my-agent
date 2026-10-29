@@ -90,7 +90,7 @@ describe('manifests', () => {
 
   test('plugin.json, .mcp.json, hooks.json and marketplace.json match the documented fields', () => {
     expect(json('plugin/.claude-plugin/plugin.json')).toMatchObject({ name: 'call-my-agent', version: '0.1.0' });
-    expect(json('plugin/.mcp.json').mcpServers.cma).toEqual({ command: 'bun', args: ['${CLAUDE_PLUGIN_ROOT}/server/index.ts'] });
+    expect(json('plugin/.mcp.json').mcpServers.cma).toEqual({ command: 'bun', args: ['${CLAUDE_PLUGIN_ROOT}/dist/server.js'] });
     const hooks = json('plugin/hooks/hooks.json').hooks;
     expect(Object.keys(hooks).sort()).toEqual(['PreToolUse', 'SessionStart']);
     const matcher = new RegExp(`^(?:${hooks.PreToolUse[0].matcher})$`);

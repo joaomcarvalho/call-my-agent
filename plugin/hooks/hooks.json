@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "bun",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/session-start.ts"]
+            "args": ["${CLAUDE_PLUGIN_ROOT}/dist/session-start.js"]
           }
         ]
       }
@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "bun",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/disclosure.ts"]
+            "args": ["${CLAUDE_PLUGIN_ROOT}/dist/disclosure.js"]
           }
         ]
       },
@@ -29,7 +29,7 @@
           {
             "type": "command",
             "command": "bun",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/read-guard.ts"]
+            "args": ["${CLAUDE_PLUGIN_ROOT}/dist/read-guard.js"]
           }
         ]
       }

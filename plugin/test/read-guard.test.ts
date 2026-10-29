@@ -92,7 +92,7 @@ describe('read guard blocks (exit 2)', () => {
 describe('hooks.json registration', () => {
   test('registers the read guard for exactly Read, Grep, Glob and NotebookRead', async () => {
     const hooks = await Bun.file(join(import.meta.dir, '..', 'hooks', 'hooks.json')).json();
-    const entry = hooks.hooks.PreToolUse.find((e: { hooks: Array<{ args: string[] }> }) => e.hooks[0]?.args[0]?.endsWith('read-guard.ts'));
+    const entry = hooks.hooks.PreToolUse.find((e: { hooks: Array<{ args: string[] }> }) => e.hooks[0]?.args[0]?.endsWith('read-guard.js'));
     const re = new RegExp(entry.matcher);
     for (const t of ['Read', 'Grep', 'Glob', 'NotebookRead']) expect(re.test(t)).toBe(true);
     for (const t of ['ReadMcp', 'MyRead', 'Edit', 'Write', 'Bash']) expect(re.test(t)).toBe(false);
