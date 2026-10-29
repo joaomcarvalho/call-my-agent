@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -49,6 +49,7 @@ export interface CallPaths {
   signoff: string;
   signoffSent: string;
   signoffRejected: string;
+  ownerLock: string;
 }
 
 export function callPaths(root: string, session: string): CallPaths {
@@ -62,6 +63,7 @@ export function callPaths(root: string, session: string): CallPaths {
     signoff: join(dir, 'signoff.json'),
     signoffSent: join(dir, 'signoff.sent.json'),
     signoffRejected: join(dir, 'signoff.rejected.json'),
+    ownerLock: join(dir, 'owner.lock'),
   };
 }
 
@@ -188,6 +190,104 @@ export function removePendingJoin(root: string, session: string): void {
 
 export function readCallRecord(root: string, session: string): CallRecord {
   return JSON.parse(readFileSync(callPaths(root, session).call, 'utf8')) as CallRecord;
+}
+
+/** owner.lock: the server process that owns a call. `owner` tells apart servers that share a pid. */
+export interface OwnerLock {
+  pid: number;
+  started_at: string;
+  owner: string;
+}
+
+const PROCESS_STARTED_AT = new Date(Date.now() - process.uptime() * 1000).toISOString();
+/** How long a half-finished stale-lock break may block others before it is itself considered stale. */
+const BREAK_STALE_MS = 10_000;
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function readText(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function parseLock(text: string | null): OwnerLock | null {
+  if (text === null) return null;
+  try {
+    const raw = JSON.parse(text) as Partial<OwnerLock>;
+    return typeof raw.pid === 'number' && typeof raw.owner === 'string' && typeof raw.started_at === 'string'
+      ? { pid: raw.pid, owner: raw.owner, started_at: raw.started_at }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Creates `path` with `text` only if it does not exist; the content is complete the moment the name appears. */
+function createExclusive(path: string, text: string): boolean {
+  const tmp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' });
+  try {
+    linkSync(tmp, path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw err;
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/** Removes `path` if it still holds `stale`, under a break lock so two breakers cannot remove each other's fresh lock. */
+function breakStaleLock(path: string, stale: string): void {
+  const breaker = `${path}.break`;
+  try {
+    if (Date.now() - statSync(breaker).mtimeMs > BREAK_STALE_MS) rmSync(breaker, { force: true });
+  } catch {
+    // no break in progress
+  }
+  if (!createExclusive(breaker, String(process.pid))) return;
+  try {
+    if (readText(path) === stale) unlinkSync(path);
+  } finally {
+    rmSync(breaker, { force: true });
+  }
+}
+
+/**
+ * Takes `<call dir>/owner.lock` for `owner`. Returns null when it is now held by `owner`, else the live holder.
+ * A lock whose pid is dead (or that cannot be parsed) is stale and is taken over.
+ */
+export function acquireOwnerLock(root: string, session: string, owner: string): OwnerLock | null {
+  const path = ensureCallDir(root, session).ownerLock;
+  const mine = JSON.stringify({ pid: process.pid, started_at: PROCESS_STARTED_AT, owner } satisfies OwnerLock);
+  let holder: OwnerLock | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (createExclusive(path, mine)) return null;
+    const text = readText(path);
+    if (text === null) continue;
+    holder = parseLock(text);
+    if (holder?.owner === owner) return null;
+    if (holder && pidAlive(holder.pid)) return holder;
+    breakStaleLock(path, text);
+  }
+  return holder ?? { pid: -1, started_at: '', owner: '' };
+}
+
+/** Removes owner.lock if `owner` holds it. */
+export function releaseOwnerLock(root: string, session: string, owner: string): void {
+  const path = callPaths(root, session).ownerLock;
+  const text = readText(path);
+  if (text !== null && parseLock(text)?.owner === owner) rmSync(path, { force: true });
 }
 
 /** Sessions with a call.json under `<root>/calls`. */

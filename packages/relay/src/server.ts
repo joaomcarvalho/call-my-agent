@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { timingSafeEqual } from 'node:crypto';
 import { base64urlDecode, base64urlEncode, isKeyId, sha256Hash, verifyBytes } from '@cma/protocol';
+import { resumeProofBytes } from './client.ts';
 
 export interface RelayOptions {
   port?: number;
@@ -61,11 +62,11 @@ function json(status: number, body: unknown): Response {
   return Response.json(body, { status });
 }
 
-function verifyResumeProof(room: string, memberKey: string, ts: unknown, proof: unknown, nowMs: number): boolean {
+function verifyResumeProof(row: RoomRow, memberKey: string, ts: unknown, proof: unknown, nowMs: number): boolean {
   if (typeof ts !== 'string' || typeof proof !== 'string') return false;
   const t = Date.parse(ts);
   if (!Number.isFinite(t) || Math.abs(nowMs - t) > PROOF_SKEW_MS) return false;
-  return verifyBytes(new TextEncoder().encode(`cma-relay-resume|${room}|${ts}`), proof, memberKey);
+  return verifyBytes(resumeProofBytes(row.room, row.secret_hash, ts), proof, memberKey);
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -223,7 +224,7 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     if (members.length >= MAX_MEMBERS && !members.some((m) => m.member_key === member_key)) {
       return json(409, { error: 'room full' });
     }
-    if (members.some((m) => m.member_key === member_key) && !verifyResumeProof(room, member_key, ts, proof, now())) {
+    if (members.some((m) => m.member_key === member_key) && !verifyResumeProof(row, member_key, ts, proof, now())) {
       return json(403, { error: 'resume proof required' });
     }
     const token = randomToken();
@@ -240,7 +241,7 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     if (!row) return json(404, { error: 'unknown room' });
     if (now() >= row.expires_at) return json(410, { error: 'expired' });
     const isMember = getMembers.all(room).some((m) => m.member_key === member_key);
-    if (!isMember || !verifyResumeProof(room, member_key, ts, proof, now())) {
+    if (!isMember || !verifyResumeProof(row, member_key, ts, proof, now())) {
       return json(403, { error: 'resume proof required' });
     }
     const token = randomToken();

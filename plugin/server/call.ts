@@ -8,6 +8,7 @@ import {
   openEnvelope,
   replay,
   sealEnvelope,
+  secretHash,
   signBytes,
   signEnvelope,
   validateNext,
@@ -23,10 +24,10 @@ import {
   type SessionState,
   type SignoffBody,
 } from '@cma/protocol';
-import { RelayClient, RelayError, type RelayMsg, type SignFn } from '@cma/relay';
+import { RelayClient, RelayError, RelayHttpError, type RelayMsg, type SignFn } from '@cma/relay';
 import { appendAudit, appendLog, callPaths, readLog, writeCallRecord, type AuditRecord, type CallPaths, type CallRecord, type LocalIdentity } from './store.ts';
 
-export type ToolErrorCode = ErrorCode | 'UNKNOWN_CALL' | 'BAD_INVITE' | 'RELAY_UNAVAILABLE';
+export type ToolErrorCode = ErrorCode | 'UNKNOWN_CALL' | 'BAD_INVITE' | 'RELAY_UNAVAILABLE' | 'NOT_CALL_SESSION';
 
 /** Reported to the model as a tool error carrying `code`. */
 export class ToolError extends Error {
@@ -41,6 +42,13 @@ export class ToolError extends Error {
 
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** The relay's own text behind a relay failure, for audit.jsonl only; null for any other error. */
+export function relayDetail(err: unknown): { status?: number; code?: string; detail: string } | null {
+  if (err instanceof RelayHttpError) return { status: err.status, detail: err.detail };
+  if (err instanceof RelayError) return { code: err.code, detail: err.detail };
+  return null;
 }
 
 /** Signs relay seat-resume proofs with the agent key. */
@@ -147,6 +155,8 @@ export class CallRuntime {
         await this.resumeSeat();
         await this.open();
       } catch (err) {
+        const raw = relayDetail(err);
+        if (raw) this.audit({ kind: 'relay_error', ...raw });
         throw new ToolError('RELAY_UNAVAILABLE', `cannot reach the relay at ${this.record.relay}: ${errorText(refused)}; ${errorText(err)}`);
       }
     }
@@ -178,6 +188,7 @@ export class CallRuntime {
   private async resumeSeat(): Promise<void> {
     const { token } = await RelayClient.resumeSeat(this.record.relay, this.record.room, {
       memberKey: this.identity.agent.keyId,
+      secretHash: secretHash(this.secret),
       sign: agentSigner(this.identity),
     });
     this.record = { ...this.record, token };
@@ -292,6 +303,8 @@ export class CallRuntime {
     } catch (err) {
       this.echoes.delete(env.id);
       if (err instanceof ToolError) throw err;
+      const raw = relayDetail(err);
+      if (raw) this.audit({ kind: 'relay_error', ...raw });
       if (err instanceof RelayError && err.code === 'TOO_LARGE') throw new ToolError('TOO_LARGE', err.message);
       throw new ToolError('RELAY_UNAVAILABLE', `${errorText(err)}; it may still be delivered, check cma_status before retrying`);
     }

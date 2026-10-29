@@ -1,3 +1,5 @@
+import { base64urlDecode, sha256Hash } from '@cma/protocol';
+
 export interface RelayMsg {
   relay_seq: number;
   msg_id: string;
@@ -6,21 +8,29 @@ export interface RelayMsg {
   ts: string;
 }
 
+const RELAY_CODE = /^[A-Z_]{1,32}$/;
+
+/** A non-2xx relay HTTP answer. The message is fixed; the relay's own text is kept only in `detail`. */
 export class RelayHttpError extends Error {
   readonly status: number;
+  readonly detail: string;
   constructor(status: number, detail: string) {
-    super(`relay HTTP ${status}: ${detail}`);
+    super(`relay refused the request (HTTP ${status})`);
     this.name = 'RelayHttpError';
     this.status = status;
+    this.detail = detail;
   }
 }
 
+/** A relay `error` frame. The message carries only a well-formed code; the relay's own text is kept only in `detail`. */
 export class RelayError extends Error {
   readonly code: string;
+  readonly detail: string;
   constructor(code: string, detail: string) {
-    super(`${code}: ${detail}`);
+    super(`relay error ${RELAY_CODE.test(code) ? code : 'UNKNOWN'}`);
     this.name = 'RelayError';
     this.code = code;
+    this.detail = detail;
   }
 }
 
@@ -56,10 +66,17 @@ async function postJson(url: string, body: unknown): Promise<Record<string, unkn
 
 export type SignFn = (bytes: Uint8Array) => string | Promise<string>;
 
-async function resumeProof(room: string, sign: SignFn): Promise<{ ts: string; proof: string }> {
-  const ts = new Date().toISOString();
-  return { ts, proof: await sign(new TextEncoder().encode(`cma-relay-resume|${room}|${ts}`)) };
+/** The bytes a seat-resume proof signs: `cma-relay-resume|<room>|<secret_hash hex>|<ts>`. */
+export function resumeProofBytes(room: string, secretHash: string, ts: string): Uint8Array {
+  return new TextEncoder().encode(`cma-relay-resume|${room}|${secretHash}|${ts}`);
 }
+
+async function resumeProof(room: string, secretHash: string, sign: SignFn): Promise<{ ts: string; proof: string }> {
+  const ts = new Date().toISOString();
+  return { ts, proof: await sign(resumeProofBytes(room, secretHash, ts)) };
+}
+
+const hashOfSecret = (secret: string): string => sha256Hash(base64urlDecode(secret)).slice('sha256:'.length);
 
 const MIN_BACKOFF_MS = 100;
 const MAX_BACKOFF_MS = 5000;
@@ -77,6 +94,7 @@ export class RelayClient {
     return { room: data.room as string, token: data.creator_token as string };
   }
 
+  /** Joins with the secret. Pass `sign` only to re-take a seat this key already holds; a first join sends no proof. */
   static async joinRoom(
     relayUrl: string,
     room: string,
@@ -85,19 +103,20 @@ export class RelayClient {
     const data = await postJson(`${relayUrl}/v1/rooms/${room}/join`, {
       secret: args.secret,
       member_key: args.memberKey,
-      ...(args.sign ? await resumeProof(room, args.sign) : {}),
+      ...(args.sign ? await resumeProof(room, hashOfSecret(args.secret), args.sign) : {}),
     });
     return { token: data.member_token as string };
   }
 
+  /** Re-takes a seat without the secret; `secretHash` is the hex sha256 of the room's join secret. */
   static async resumeSeat(
     relayUrl: string,
     room: string,
-    args: { memberKey: string; sign: SignFn },
+    args: { memberKey: string; secretHash: string; sign: SignFn },
   ): Promise<{ token: string }> {
     const data = await postJson(`${relayUrl}/v1/rooms/${room}/resume`, {
       member_key: args.memberKey,
-      ...(await resumeProof(room, args.sign)),
+      ...(await resumeProof(room, args.secretHash, args.sign)),
     });
     return { token: data.member_token as string };
   }
@@ -224,8 +243,8 @@ export class RelayClient {
         this.args.onPresence?.({ member_key: f.member_key as string, online: f.online as boolean });
         return;
       case 'error': {
-        const code = f.code as string;
-        const detail = f.detail as string;
+        const code = String(f.code);
+        const detail = String(f.detail);
         const id = f.msg_id;
         if (typeof id === 'string') {
           const p = this.pending.get(id);

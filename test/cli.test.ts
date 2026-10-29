@@ -189,6 +189,17 @@ describe('session', () => {
     expect(run.stdout).toContain(`--settings ${settingsPath}`);
     expect(run.stdout).toContain('--plugin-dir');
     expect(run.stdout).toContain(`CMA_HOME=${home}`);
+    expect(run.stdout).toContain(`CMA_HOME=${home} CMA_CALL_SESSION=1 claude `);
+  });
+
+  test('T11: session --exec starts claude with CMA_CALL_SESSION=1 and CMA_HOME', async () => {
+    const home = tmp();
+    const bin = tmp();
+    const seen = join(bin, 'seen-env');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s %s' "$CMA_CALL_SESSION" "$CMA_HOME" > '${seen}'\n`, { mode: 0o755 });
+    const run = await cma(['session', tmp(), '--exec', '--home', home], { PATH: `${bin}:${process.env.PATH ?? ''}` });
+    expect(run.code).toBe(0);
+    expect(readFileSync(seen, 'utf8')).toBe(`1 ${home}`);
   });
 
   test('session --exec refuses --dangerously-skip-permissions and --permission-mode', async () => {

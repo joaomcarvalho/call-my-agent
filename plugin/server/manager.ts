@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   DEFAULT_BUDGETS,
   agreementFileName,
@@ -41,15 +41,17 @@ import {
 } from '@cma/protocol';
 import { RelayClient, RelayHttpError, type RelayMsg } from '@cma/relay';
 import { CallRuntime, ToolError, agentSigner, errorText, type RuntimeHooks } from './call.ts';
-import { badge, fencePlan, floorLabel, formatInjection, messageLine, sanitizeLabel, type InjectionHeader } from './format.ts';
-import { Inbox, type InboxItem } from './inbox.ts';
+import { badge, fenceInvite, fencePlan, floorLabel, formatInjection, messageLine, sanitizeLabel, type InjectionHeader } from './format.ts';
+import { Inbox, wakeOf, type InboxItem } from './inbox.ts';
 import {
   SESSION_ID,
+  acquireOwnerLock,
   callPaths,
   listSessions,
   loadOrCreateIdentity,
   readCallRecord,
   readPendingJoin,
+  releaseOwnerLock,
   removePendingJoin,
   writeCallRecord,
   writePendingJoin,
@@ -65,13 +67,21 @@ const ROOM_TTL_S = 259200;
 export const DEFAULT_RELAY_URL = 'http://127.0.0.1:8787';
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 
+/** Bounds on the caller-chosen charter text an invite may carry. */
+export const INVITE_LIMITS = { shareSetEntries: 20, shareSetEntryChars: 200, topicChars: 200, inviteeLabelChars: 100 } as const;
+
+export const NOT_CALL_SESSION_DETAIL =
+  'call-my-agent tools only work in a call session. Ask your human to start one in a terminal with `cma session <dir> --exec`.';
+
 export interface CallManagerOptions {
   home: string;
   relayUrl?: string;
   /** Where `cma_write_plan` writes `docs/agreements/`; recorded per call when it is created. */
   repoRoot?: string;
-  /** Source of the messaging socket variables. */
+  /** Source of the messaging socket variables and of `CMA_CALL_SESSION`. */
   env?: Record<string, string | undefined>;
+  /** Acts as a call session without `CMA_CALL_SESSION=1` in `env`. The owner lock still applies. */
+  assumeCallSession?: boolean;
   /** Used only when `identity/profile.json` does not exist yet. */
   profile?: Partial<Profile>;
   batchMs?: number;
@@ -169,6 +179,31 @@ function parseInvite(text: string): Invite {
   return invite;
 }
 
+/** Why a charter is outside INVITE_LIMITS, or null. */
+function charterLimitProblem(c: Pick<Charter, 'topic' | 'invitee_label' | 'share_set'>): string | null {
+  const L = INVITE_LIMITS;
+  if (c.share_set.length > L.shareSetEntries) return `the share set has more than ${L.shareSetEntries} entries`;
+  if (c.share_set.some((entry) => entry.length > L.shareSetEntryChars)) return `a share set entry is longer than ${L.shareSetEntryChars} characters`;
+  if (c.topic.length > L.topicChars) return `the topic is longer than ${L.topicChars} characters`;
+  if (c.invitee_label.length > L.inviteeLabelChars) return `the invitee label is longer than ${L.inviteeLabelChars} characters`;
+  return null;
+}
+
+/** Writes `text` to a new file at `path`; an existing byte-identical file also counts. Null when a different file is there. */
+function writeAgreement(path: string, text: string): string | null {
+  try {
+    writeFileSync(path, text, { flag: 'wx' });
+    return path;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+  try {
+    return readFileSync(path, 'utf8') === text ? path : null;
+  } catch {
+    return null;
+  }
+}
+
 function relayJoinError(err: unknown): ToolError {
   if (err instanceof RelayHttpError) {
     if (err.status === 403) return new ToolError('JOIN_PROOF_INVALID', 'the relay refused the invite secret or the seat-resume proof');
@@ -198,10 +233,14 @@ export class CallManager {
   private readonly relayUrl: string;
   private readonly repoRoot: string;
   private readonly hooks: RuntimeHooks;
+  private readonly callSession: boolean;
+  private readonly ownerId = crypto.randomUUID();
+  private readonly owned = new Set<string>();
   private local: LocalIdentity | null = null;
 
   constructor(private readonly opts: CallManagerOptions) {
     this.root = opts.home;
+    this.callSession = opts.assumeCallSession === true || opts.env?.CMA_CALL_SESSION === '1';
     this.relayUrl = (opts.relayUrl ?? DEFAULT_RELAY_URL).replace(/\/+$/, '');
     this.repoRoot = opts.repoRoot ?? process.cwd();
     this.inbox = new Inbox({
@@ -217,14 +256,17 @@ export class CallManager {
     };
   }
 
-  /** Loads every call on disk and reconnects the ones that are still open. */
+  /** Loads every call on disk that no other live server owns and reconnects the open ones. Outside a call session, none. */
   async init(): Promise<void> {
+    if (!this.callSession) return;
     for (const session of listSessions(this.root)) {
       if (this.calls.has(session)) continue;
+      if (!this.claim(session)) continue;
       let record: CallRecord;
       try {
         record = readCallRecord(this.root, session);
       } catch {
+        this.unclaim(session);
         continue;
       }
       const rt = this.attach(record);
@@ -240,12 +282,13 @@ export class CallManager {
   async close(): Promise<void> {
     this.inbox.close();
     await Promise.all([...this.calls.values()].map((rt) => rt.stop()));
+    for (const session of [...this.owned]) this.unclaim(session);
   }
 
+  /** The call's runtime, attaching it first when it is on disk and no other live server owns it. */
   runtime(session: string): CallRuntime {
-    const rt = this.calls.get(session);
-    if (!rt) throw new ToolError('UNKNOWN_CALL', `no call ${session} on this machine; see cma_list_calls`);
-    return rt;
+    this.guard();
+    return this.calls.get(session) ?? this.adopt(session);
   }
 
   identity(): LocalIdentity {
@@ -256,6 +299,9 @@ export class CallManager {
   // ---------------------------------------------------------------- tools
 
   async startCall(input: StartCallInput): Promise<ToolResult> {
+    this.guard();
+    const limit = charterLimitProblem({ topic: input.topic, invitee_label: input.peer, share_set: input.share_set ?? [] });
+    if (limit) throw new ToolError('BAD_INVITE', `the peer would refuse this invite: ${limit}`);
     const id = this.identity();
     const type = input.type ?? 'contract';
     const mode = input.mode ?? 'org';
@@ -312,6 +358,7 @@ export class CallManager {
       cursor: 0,
       repo_root: this.repoRoot,
     };
+    if (!this.claim(session)) throw new ToolError('INVALID_STATE', `call ${session} is owned by another session`);
     writeCallRecord(this.root, record);
     const rt = this.attach(record);
     await rt.connect();
@@ -320,9 +367,12 @@ export class CallManager {
   }
 
   async inspectInvite(input: { invite: string }): Promise<ToolResult> {
+    this.guard();
     const invite = parseInvite(input.invite);
     const opening = await this.fetchOpening(invite);
     const { charter } = opening;
+    const limit = charterLimitProblem(charter);
+    if (limit) throw new ToolError('BAD_INVITE', `refusing this invite: ${limit}`);
     const problems = openingMismatches(invite, opening);
     const now = Date.now();
     if (Date.parse(invite.exp) <= now || Date.parse(charter.expires_at) <= now) problems.push('the invite has expired');
@@ -334,13 +384,17 @@ export class CallManager {
       floor: null,
       version: 0,
       awaiting_human: { you: false, peer: false },
-      topic: sanitizeLabel(charter.topic, 200),
       type: charter.type,
       mode: charter.mode,
-      inviter: this.peerSummary(charter.inviter, charter.mode),
+      inviter: { fingerprint: fingerprint(charter.inviter.agent_key), assurance: charter.inviter.assurance },
       fingerprint: fingerprint(charter.inviter.agent_key),
-      invitee_label: sanitizeLabel(charter.invitee_label),
-      share_set: charter.share_set.map((path) => sanitizeLabel(path, 200)),
+      charter: fenceInvite(invite.session, [
+        `topic: ${sanitizeLabel(charter.topic, INVITE_LIMITS.topicChars)}`,
+        `inviter: ${sanitizeLabel(charter.inviter.human)} (${sanitizeLabel(badge(charter.inviter, charter.mode))})`,
+        `invitee_label: ${sanitizeLabel(charter.invitee_label, INVITE_LIMITS.inviteeLabelChars)}`,
+        `share_set:${charter.share_set.length === 0 ? ' (none)' : ''}`,
+        ...charter.share_set.map((path) => `- ${sanitizeLabel(path, INVITE_LIMITS.shareSetEntryChars)}`),
+      ]),
       budgets: { turns_per_party: charter.budgets.turns_per_party, proposals: charter.budgets.proposals, ttl_s: charter.budgets.ttl_s },
       checkpoint_kinds: charter.checkpoint_kinds,
       expires_at: charter.expires_at,
@@ -349,16 +403,18 @@ export class CallManager {
   }
 
   async joinCall(input: { invite: string }): Promise<ToolResult> {
+    this.guard();
     const invite = parseInvite(input.invite);
-    const existing = this.calls.get(invite.session);
-    if (existing) {
+    if (this.calls.has(invite.session) || existsSync(callPaths(this.root, invite.session).call)) {
+      const existing = this.runtime(invite.session);
       if (existing.party === 'B') return this.joinResult(existing);
       throw new ToolError('INVALID_STATE', 'this machine started the call; it cannot also join it');
     }
-    if (existsSync(callPaths(this.root, invite.session).call)) throw new ToolError('INVALID_STATE', 'this call already exists on this machine');
     if (Date.parse(invite.exp) <= Date.now()) throw new ToolError('INVALID_STATE', `the invite expired at ${invite.exp}`);
     const id = this.identity();
     const opening = await this.fetchOpening(invite);
+    const limit = charterLimitProblem(opening.charter);
+    if (limit) throw new ToolError('BAD_INVITE', `refusing this invite: ${limit}`);
     const mismatches = openingMismatches(invite, opening);
     if (mismatches.length > 0) throw new ToolError('CHARTER_MISMATCH', `refusing to join: ${mismatches.join('; ')}`);
     const x = generateX25519();
@@ -376,6 +432,7 @@ export class CallManager {
       cursor: 0,
       repo_root: this.repoRoot,
     };
+    if (!this.claim(invite.session)) throw new ToolError('UNKNOWN_CALL', `call ${invite.session} is owned by another session on this machine`);
     writeCallRecord(this.root, record);
     removePendingJoin(this.root, invite.session);
     const rt = this.attach(record);
@@ -490,12 +547,14 @@ export class CallManager {
   }
 
   status(input: { session?: string } = {}): ToolResult {
+    this.guard();
     if (input.session) return this.statusOf(this.runtime(input.session));
     const open = [...this.calls.values()].filter((rt) => !rt.terminal);
     return open.length === 1 ? this.statusOf(open[0]!) : this.listCalls();
   }
 
   listCalls(): ToolResult {
+    this.guard();
     const calls = [...this.calls.values()]
       .sort((a, b) => a.session.localeCompare(b.session))
       .map((rt) => {
@@ -550,9 +609,12 @@ export class CallManager {
     } catch (err) {
       throw new ToolError('SIGNOFF_MISMATCH', errorText(err));
     }
-    const path = join(rt.record.repo_root, 'docs', 'agreements', agreementFileName(plan, charter));
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, text);
+    const name = agreementFileName(plan, charter);
+    const dir = join(rt.record.repo_root, 'docs', 'agreements');
+    mkdirSync(dir, { recursive: true });
+    const path =
+      writeAgreement(join(dir, name), text) ?? writeAgreement(join(dir, `${name.slice(0, -'.md'.length)}-${rt.session.slice(0, 8)}.md`), text);
+    if (!path) throw new ToolError('INVALID_STATE', `docs/agreements/ already holds different files named ${name} and its per-session variant`);
     rt.agreementPath = path;
     rt.audit({ kind: 'agreement_written', path, plan_hash: r.final.planHash });
     if (!r.stored[rt.party]) await rt.send('bye', { stored: r.final.planHash });
@@ -560,6 +622,40 @@ export class CallManager {
   }
 
   // ---------------------------------------------------------------- internals
+
+  private guard(): void {
+    if (!this.callSession) throw new ToolError('NOT_CALL_SESSION', NOT_CALL_SESSION_DETAIL);
+  }
+
+  /** Takes the call's owner lock for this server; false when another live server holds it. */
+  private claim(session: string): boolean {
+    if (acquireOwnerLock(this.root, session, this.ownerId) !== null) return false;
+    this.owned.add(session);
+    return true;
+  }
+
+  private unclaim(session: string): void {
+    releaseOwnerLock(this.root, session, this.ownerId);
+    this.owned.delete(session);
+  }
+
+  /** Attaches a call on disk that this server did not load, e.g. after the server that owned it died. */
+  private adopt(session: string): CallRuntime {
+    if (!SESSION_ID.test(session) || !existsSync(callPaths(this.root, session).call)) {
+      throw new ToolError('UNKNOWN_CALL', `no call ${session} on this machine; see cma_list_calls`);
+    }
+    if (!this.claim(session)) throw new ToolError('UNKNOWN_CALL', `call ${session} is owned by another session on this machine`);
+    let record: CallRecord;
+    try {
+      record = readCallRecord(this.root, session);
+    } catch (err) {
+      this.unclaim(session);
+      throw new ToolError('UNKNOWN_CALL', `call ${session} cannot be loaded: ${errorText(err)}`);
+    }
+    const rt = this.attach(record);
+    if (!rt.terminal) void rt.connect().catch((err: unknown) => rt.audit({ kind: 'relay_error', detail: errorText(err) }));
+    return rt;
+  }
 
   private attach(record: CallRecord): CallRuntime {
     const rt = new CallRuntime(this.root, record, this.identity(), this.hooks, {
@@ -572,7 +668,7 @@ export class CallManager {
 
   private deliver(rt: CallRuntime, env: Envelope): void {
     if (env.type === 'session_open' || env.type === 'heartbeat') return;
-    this.inbox.push(rt.session, { relay_seq: env.relay_seq ?? 0, line: messageLine(env) });
+    this.inbox.push(rt.session, { relay_seq: env.relay_seq ?? 0, line: messageLine(env) }, wakeOf(env.type));
   }
 
   private ownIdentity(id: LocalIdentity, x25519: string): Identity {
@@ -586,20 +682,49 @@ export class CallManager {
     };
   }
 
-  /** Takes a relay seat for the invite (a first join, or a re-join with a resume proof) and records it as a pending join. */
+  /** True when this machine recorded the invite's relay URL for its session, in a pending join or in call.json. */
+  private relayRecorded(invite: Invite): boolean {
+    if (readPendingJoin(this.root, invite.session)?.relay === invite.relay) return true;
+    if (!existsSync(callPaths(this.root, invite.session).call)) return false;
+    try {
+      return readCallRecord(this.root, invite.session).relay === invite.relay;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Takes a relay seat for the invite and records it as a pending join. A first join sends no resume proof; a seat
+   * this key already holds is resumed only on a relay URL this machine recorded for the session.
+   */
   private async takeSeat(invite: Invite, how: 'join' | 'resume'): Promise<string> {
     const id = this.identity();
-    const sign = agentSigner(id);
     let token: string;
     try {
-      ({ token } =
-        how === 'join'
-          ? await RelayClient.joinRoom(invite.relay, invite.room, { secret: invite.secret, memberKey: id.agent.keyId, sign })
-          : await RelayClient.resumeSeat(invite.relay, invite.room, { memberKey: id.agent.keyId, sign }));
+      if (how === 'join') {
+        try {
+          ({ token } = await RelayClient.joinRoom(invite.relay, invite.room, { secret: invite.secret, memberKey: id.agent.keyId }));
+        } catch (err) {
+          if (!(err instanceof RelayHttpError && err.status === 403 && this.relayRecorded(invite))) throw err;
+          token = await this.resumeSeat(invite);
+        }
+      } else {
+        token = await this.resumeSeat(invite);
+      }
     } catch (err) {
       throw relayJoinError(err);
     }
     writePendingJoin(this.root, { session: invite.session, relay: invite.relay, room: invite.room, token });
+    return token;
+  }
+
+  private async resumeSeat(invite: Invite): Promise<string> {
+    const id = this.identity();
+    const { token } = await RelayClient.resumeSeat(invite.relay, invite.room, {
+      memberKey: id.agent.keyId,
+      secretHash: secretHash(base64urlDecode(invite.secret)),
+      sign: agentSigner(id),
+    });
     return token;
   }
 
@@ -620,7 +745,8 @@ export class CallManager {
     let msgs: RelayMsg[];
     try {
       msgs = await this.readRoom(invite, token);
-    } catch {
+    } catch (err) {
+      if (!this.relayRecorded(invite)) throw new ToolError('RELAY_UNAVAILABLE', errorText(err));
       token = await this.takeSeat(invite, 'resume');
       try {
         msgs = await this.readRoom(invite, token);
