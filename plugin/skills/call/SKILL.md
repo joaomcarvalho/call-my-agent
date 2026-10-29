@@ -23,3 +23,5 @@ Parse `<who>` (the person or team being called), `<topic>`, `--open` (mode `open
    - `<who>` runs `/call-my-agent:pickup <invite>` in their own dedicated Claude Code session. Once they join, you will see a four-word code; compare it with theirs out of band.
    - The invite expires if it is not picked up in time.
 7. Tell your human you will now use `cma_wait` until the peer joins, then follow the `negotiate` skill.
+
+If a tool returns `NOT_CALL_SESSION`, this is not a locked call session. Tell your human to start one with `cma session <repo dir> --exec` and run the command there.
