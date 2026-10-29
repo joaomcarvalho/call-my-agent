@@ -16,6 +16,7 @@ import {
   type Party,
 } from '@cma/protocol';
 import { startRelay } from '@cma/relay';
+import { DEFAULT_RELAY, formatCheck, runDoctor, statusLine } from './diagnostics.ts';
 import {
   callPaths,
   identityPaths,
@@ -37,6 +38,8 @@ const USAGE = `usage: cma [--home <dir>] <command>
   relay [--port 8787] [--db path] [--host 127.0.0.1]
   session [dir] [--exec] [--from <last|pick|session-id>] [-- <claude args>]
   calls
+  doctor [--relay <url>]
+  statusline
   invite <session|CMA-code>
   log <session|CMA-code> [--json]`;
 
@@ -308,6 +311,14 @@ function log(root: string, args: string[]): number {
   return 0;
 }
 
+async function doctor(root: string, args: string[], env: Record<string, string | undefined>): Promise<number> {
+  const { values } = parseArgs({ args, options: { relay: { type: 'string' } } });
+  const relayUrl = values.relay ?? (env.CMA_RELAY_URL || DEFAULT_RELAY);
+  const results = await runDoctor({ root, relay: relayUrl, env, profilePath: BASE_PROFILE });
+  for (const r of results) out(formatCheck(r));
+  return results.some((r) => r.status === 'fail') ? 1 : 0;
+}
+
 function invite(root: string, args: string[]): number {
   const ref = args[0];
   if (!ref) fail('usage: cma invite <session|CMA-code>');
@@ -354,6 +365,13 @@ export async function main(argv: string[], env: Record<string, string | undefine
         return await session(root, args);
       case 'calls':
         return calls(root);
+      case 'doctor':
+        return await doctor(root, args, env);
+      case 'statusline': {
+        const line = statusLine(root);
+        if (line) out(line);
+        return 0;
+      }
       case 'invite':
         return invite(root, args);
       case 'log':
