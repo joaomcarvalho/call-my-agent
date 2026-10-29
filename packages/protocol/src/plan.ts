@@ -79,7 +79,7 @@ const planObject = z
     meta: z
       .object({
         title: text,
-        type: z.enum(['contract', 'impact', 'plan', 'question']),
+        type: z.enum(['contract', 'impact', 'plan', 'question', 'sync']),
         parties: z.object({ A: text, B: text }).strict(),
         charter_hash: hash,
       })

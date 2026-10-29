@@ -13,7 +13,7 @@ export type Hash = `sha256:${string}`;
 export type KeyId = `ed25519:${string}`;
 
 export type Mode = 'org' | 'open';
-export type CallType = 'contract' | 'impact' | 'plan' | 'question';
+export type CallType = 'contract' | 'impact' | 'plan' | 'question' | 'sync';
 
 export type DecisionKind =
   | 'breaking_change'
