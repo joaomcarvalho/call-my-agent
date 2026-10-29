@@ -34,6 +34,35 @@ export class RelayError extends Error {
   }
 }
 
+/** A relay URL that would send the token in the clear to a non-loopback host. */
+export class InsecureRelayError extends Error {
+  constructor(url: string) {
+    super(
+      `refusing to use ${url}: a non-loopback relay must use https:// (the relay token travels in the URL). ` +
+        'Set CMA_ALLOW_INSECURE_RELAY=1 only on a network you trust, such as a tailnet.',
+    );
+    this.name = 'InsecureRelayError';
+  }
+}
+
+const isLoopbackHost = (host: string): boolean => {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
+};
+
+/** Throws unless `relayUrl` is https, loopback, or `CMA_ALLOW_INSECURE_RELAY=1` is set in `env`. */
+export function assertSecureRelayUrl(relayUrl: string, env: Record<string, string | undefined> = process.env): void {
+  if (env.CMA_ALLOW_INSECURE_RELAY === '1') return;
+  let url: URL;
+  try {
+    url = new URL(relayUrl);
+  } catch {
+    return;
+  }
+  if (url.protocol === 'https:' || url.protocol === 'wss:') return;
+  if (!isLoopbackHost(url.hostname)) throw new InsecureRelayError(relayUrl);
+}
+
 export interface RelayClientArgs {
   relayUrl: string;
   room: string;
@@ -54,6 +83,7 @@ interface Pending {
 }
 
 async function postJson(url: string, body: unknown): Promise<Record<string, unknown>> {
+  assertSecureRelayUrl(url);
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -133,6 +163,7 @@ export class RelayClient {
   private firstConnect: { resolve(): void; reject(e: Error): void } | null = null;
 
   constructor(args: RelayClientArgs) {
+    assertSecureRelayUrl(args.relayUrl);
     this.args = args;
     this.lastCursor = args.cursor ?? 0;
   }

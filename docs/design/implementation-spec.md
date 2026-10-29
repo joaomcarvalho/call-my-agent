@@ -43,11 +43,12 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 5. If `opts.now` is past `charter.expires_at` while `INVITED` → `EXPIRED`. After `welcome`, if `opts.now` is past `welcome.ts + budgets.ttl_s` → `EXPIRED` (`INVITED`/`HANDSHAKE` expire at `charter.expires_at`).
 
 ### 2.4 Floor and turns
-- Floor messages: `say`, `propose`, `counter`, and `accept`/`reject` of a proposal. Each requires `from.party == floor` (else `NOT_YOUR_FLOOR`) and passes the floor to the other party. Each counts one turn for the sender.
+- Floor messages: `say`, `propose`, `counter`, and `accept`/`reject` of a proposal. Each requires `from.party == floor` (else `NOT_YOUR_FLOOR`) and passes the floor to the other party, unless the envelope has `floor: "hold"`. Each counts one turn for the sender.
+- `floor: "hold"` keeps the floor with the sender; absent or `"yield"` passes it. A party sends at most `MAX_HOLD_RUN = 3` floor messages in a row: `hold` on the third (two held messages already) → `INVALID_STATE`. `propose` with `hold` → `INVALID_STATE`, so the peer can always answer a proposal. `result.holdRun` counts the held messages since the floor last passed. `floor` on any other message has no effect.
 - `amend` and `withdraw` are floor-free but only the proposer may send them while its proposal is pending. They don't count turns.
 - Control messages (`ask_user_pending`, `user_answer_summary`, `request_signoff`, `unfreeze`, `signoff`, `plan_final`, `resolve`, `heartbeat`, `error`, `abort`, `bye`) don't need the floor and don't count turns.
 - When a party's turns reach `turns_per_party`, state → `DEADLOCKED` (reason `BUDGET_EXHAUSTED`).
-- `no_progress`: floor turns since the last version change. Equal to `no_progress_nudge` → `result.nudge = true`. Reaching `no_progress_deadlock` → `DEADLOCKED`.
+- `no_progress`: floor turns (held or not) since the last version change. Equal to `no_progress_nudge` → `result.nudge = true`. Reaching `no_progress_deadlock` → `DEADLOCKED`.
 - Consecutive `counter` messages without an `accept` reaching `counter_streak_deadlock` → `DEADLOCKED`.
 - More than `budgets.proposals` total `propose`+`counter`+`amend` → that message is rejected `BUDGET_EXHAUSTED`.
 
@@ -116,6 +117,8 @@ HTTP, JSON bodies:
 - `POST /v1/rooms/:room/resume` `{member_key, ts, proof}` → 200 `{member_token}`. Resume without the secret (the creator's path). 403 for a non-member key or a bad proof; 404/410 as for join.
 - Resume proof: `proof` is the base64url Ed25519 signature, by `member_key`, over the UTF-8 string `cma-relay-resume|<room>|<secret_hash hex>|<ts>`, where `secret_hash` is the room's stored secret hash (lowercase hex sha256 of the secret bytes, as sent at creation); `ts` is an ISO timestamp within ±5 minutes of the relay clock. A proof made for another secret hash, another room or the old `cma-relay-resume|<room>|<ts>` form is 403.
 - Tokens are 32 random bytes b64url; the relay stores only their sha256.
+- Transport: the token travels in the WebSocket URL, so a relay URL must be `https://`, or `http://` to a loopback host (`127.0.0.0/8`, `::1`, `localhost`). `RelayClient` (every static call and the constructor) and the plugin (`cma_start_call` as `RELAY_UNAVAILABLE`, invites as `BAD_INVITE`) refuse any other `http://`/`ws://` URL unless the environment variable `CMA_ALLOW_INSECURE_RELAY=1` is set, intended for already-encrypted networks such as a tailnet.
+- Client IP for the room-creation limit is the socket address. With the opt-in `--trust-proxy` flag (`trustProxy` in `startRelay`), off by default, it is the left-most `X-Forwarded-For` value when present, else the socket address. Enable it only behind a proxy that sets the header.
 
 WebSocket `GET /v1/rooms/:room/ws?token=<token>`; JSON text frames:
 - C→R `{t:"send", msg_id, payload}` → R→C `{t:"sent", msg_id, relay_seq, dup}`; R→all connected members incl. sender `{t:"msg", relay_seq, msg_id, sender_key, payload, ts}`. Dedup on `(room, msg_id)`: a duplicate returns the original `relay_seq` with `dup: true` and is not re-broadcast.
@@ -170,9 +173,9 @@ All take/return JSON; every result includes `state`, `floor`, `version`. Errors 
 - `cma_start_call({peer, topic, type="contract" (one of `contract|impact|plan|question|sync`), mode="org", share_set?: string[]})` → `{session, invite, code, fingerprint}`
 - `cma_inspect_invite({invite})` → `type`, `mode`, `fingerprint`, `inviter: {fingerprint, assurance}`, budgets, checkpoint kinds, `expires_at`, `problems`, and `charter`: a one-line note followed by a `<counterparty_data call="<session>">` block holding `topic:`, `inviter: <human> (<org or EXTERNAL>)`, `invitee_label:` and `share_set:` with one `- <entry>` line each (no join). An invite whose charter has more than 20 share-set entries, a share-set entry over 200 characters, a topic over 200 characters or an invitee label over 100 characters is refused with `BAD_INVITE` by inspect and join; `cma_start_call` refuses the same inputs locally.
 - `cma_join_call({invite})` → `{session, peer, fingerprint, four_words}`
-- `cma_say({session, text, evidence?})`
+- `cma_say({session, text, evidence?, keep_floor?})` — `keep_floor: true` sends with `floor: "hold"` (§2.4)
 - `cma_propose({session, patch, kinds?, rationale, checkpoint_ref?})` — the server prepends the `/version` test op if missing
-- `cma_respond({session, action: "accept"|"reject"|"counter", reasons?, patch?, kinds?, rationale?, checkpoint_ref?})` — responds to the pending proposal or signoff request
+- `cma_respond({session, action: "accept"|"reject"|"counter", reasons?, patch?, kinds?, rationale?, checkpoint_ref?, keep_floor?})` — responds to the pending proposal or signoff request; `keep_floor` as for `cma_say`
 - `cma_withdraw({session})`
 - `cma_checkpoint({session, question, kind?, blocks?})` → `{checkpoint_id}`; then the agent ends its turn and asks its human
 - `cma_answer_checkpoint({session, checkpoint_id, shareable_summary})` → `{checkpoint_ref}`

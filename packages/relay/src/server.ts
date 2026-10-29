@@ -6,6 +6,8 @@ import { resumeProofBytes } from './client.ts';
 export interface RelayOptions {
   port?: number;
   hostname?: string;
+  /** Rate-limit by the left-most X-Forwarded-For value instead of the socket address. Only behind a proxy that sets it. */
+  trustProxy?: boolean;
   dbPath?: string;
   now?: () => number;
 }
@@ -182,10 +184,18 @@ export function startRelay(opts: RelayOptions = {}): { url: string; port: number
     }
   };
 
+  const clientIp = (req: Request, srv: Bun.Server<WsData>): string => {
+    if (opts.trustProxy) {
+      const first = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+      if (first) return first;
+    }
+    return srv.requestIP(req)?.address ?? 'unknown';
+  };
+
   async function createRoom(req: Request, srv: Bun.Server<WsData>): Promise<Response> {
     const t = now();
     sweepRateMaps(t);
-    const ip = srv.requestIP(req)?.address ?? 'unknown';
+    const ip = clientIp(req, srv);
     const recent = (createTimes.get(ip) ?? []).filter((x) => t - x < RATE_WINDOW_MS);
     if (recent.length >= ROOM_CREATE_LIMIT) {
       createTimes.set(ip, recent);

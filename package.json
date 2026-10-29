@@ -20,5 +20,8 @@
     "@cma/relay": "workspace:*",
     "@cma/plugin": "workspace:*"
   },
+  "overrides": {
+    "zod": "4.6.6"
+  },
   "license": "MIT"
 }

@@ -51,9 +51,9 @@ function frontmatter(file: string): Record<string, string> {
 }
 
 describe('skills', () => {
-  test('the seven expected skills exist', () => {
+  test('the eight expected skills exist', () => {
     const names = skillMds.map((f) => f.split('/').slice(-2)[0]).sort();
-    expect(names).toEqual(['call', 'calls', 'catch-up', 'hangup', 'negotiate', 'pickup', 'sign']);
+    expect(names).toEqual(['ask', 'call', 'calls', 'catch-up', 'hangup', 'negotiate', 'pickup', 'sign']);
   });
 
   test('every SKILL.md has name and description frontmatter', () => {

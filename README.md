@@ -2,16 +2,19 @@
 
 Connect two engineers' Claude Code sessions. Their agents talk to each other, ask their own human when it matters, and end with one plan both humans sign.
 
-## Two use cases
+## Three use cases
 
 **Agree an API contract between two services.** The producer's agent and the consumer's agent each argue from their own repo, with `path:line` evidence. They surface breaking changes, PII and rollout constraints, and settle on one contract: no copy-pasting from Slack into two sessions.
 
 **Sync exploratory work.** Two engineers each explored a new system or feature in their own Claude Code session and now hold different context. Each forks their exploration session into a call. Their agents compare findings, reconcile what contradicts, and write one shared model, with decisions, open questions and next steps per person. Both humans sign it, and each brings it back into their working session with `/call-my-agent:catch-up`.
 
-In both cases, each agent runs in a locked, read-only call session on its own engineer's machine and stops to ask its own human at computed checkpoints. They talk through a relay that only ever sees ciphertext. The call ends with one plan file, byte-identical on both sides, signed by both humans outside the model.
+**Ask another team's agent.** "How does your service handle X?" Your agent puts the question to Bob's agent, which answers from Bob's repo with `path:line` citations, or says it doesn't know. Start with `/call-my-agent:ask bob "How do you handle retries on order webhooks?"`. Nothing is shared from your repo by default. A question call still ends with both humans signing the answer note, because the protocol requires it; a lighter ending without signatures is a possible follow-up.
+
+In all cases, each agent runs in a locked, read-only call session on its own engineer's machine and stops to ask its own human at computed checkpoints. They talk through a relay that only ever sees ciphertext. The call ends with one plan file, byte-identical on both sides, signed by both humans outside the model.
 
 - Design: [docs/design/proposal.md](docs/design/proposal.md)
 - Implementation spec (authoritative): [docs/design/implementation-spec.md](docs/design/implementation-spec.md)
+- Ideas and roadmap: [docs/ideas.md](docs/ideas.md)
 
 ## Requirements
 
@@ -31,6 +34,8 @@ Both engineers need the repo checked out. One of them runs a relay the other can
 ```bash
 cma relay --port 8787            # prints the URL; set CMA_RELAY_URL if it isn't http://127.0.0.1:8787
 ```
+
+A relay that is not on loopback must be served over https; plain `http://` to another host is refused unless `CMA_ALLOW_INSECURE_RELAY=1` is set (for a tailnet). [deploy/relay/README.md](deploy/relay/README.md) has copy-paste setups for Tailscale, Fly.io, and a VPS behind Caddy, plus the Dockerfile.
 
 Each engineer, once:
 
@@ -70,6 +75,8 @@ Same setup, three differences:
 
 ### Example output
 
+[docs/examples/sample-sync-note.md](docs/examples/sample-sync-note.md) is a real sync note: two Claude sessions explored order-event webhooks separately (one in each example service), were forked into call sessions, and synced into one shared model.
+
 [docs/examples/sample-agreement.md](docs/examples/sample-agreement.md) is a real output: two Claude agents negotiated it from `examples/orders-service` and `examples/billing-service` over a local relay, with demo humans answering nine checkpoints and signing.
 
 Anyone can check an agreement file:
@@ -78,7 +85,7 @@ Anyone can check an agreement file:
 cma verify docs/agreements/2026-10-28-orders-api-v2.md --expect A=ed25519:… --expect B=ed25519:…
 ```
 
-Other commands: `cma log CMA-XXXX-XXXX` prints the decrypted conversation; `cma invite CMA-XXXX-XXXX` prints a call's full invite again; `cma calls` lists calls and their state; `/call-my-agent:hangup` ends a call without agreement.
+Other commands: `cma log CMA-XXXX-XXXX` prints the decrypted conversation; `cma invite CMA-XXXX-XXXX` prints a call's full invite again; `cma calls` lists calls and their state; `/call-my-agent:hangup` ends a call without agreement; `cma eval <agreement.md>` scores a call on the example repos against its planted conflicts ([evals/](evals/README.md)).
 
 ## Check your setup
 
@@ -126,8 +133,9 @@ Known limits of v0.1: identities are self-asserted (no GitHub/OIDC yet), one rel
 packages/protocol   CMA/0.1: envelopes, hash chain, plan + JSON Patch reducer, renderer, replay state machine, E2EE, invites, agreement files
 packages/relay      Bun + SQLite relay and client
 plugin/             Claude Code plugin: MCP server, skills, hooks, call profile
-bin/cma             CLI: keygen, session, approve, verify, relay, calls, doctor, statusline
+bin/cma             CLI: keygen, session, approve, verify, eval, relay, calls, doctor, statusline
 examples/           orders-service and billing-service with planted contract conflicts
+evals/              scenario rubrics and the scorer behind `cma eval`
 docs/tasks/         the task cards the implementation was built from
 ```
 
