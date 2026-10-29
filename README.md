@@ -85,3 +85,9 @@ docs/tasks/         the task cards the implementation was built from
 ```bash
 bun run check   # typecheck + all tests
 ```
+
+## License
+
+The code is licensed under the [Functional Source License 1.1, Apache 2.0 Future License](LICENSE.md) (`FSL-1.1-ALv2`). Use it, self-host it, modify it and contribute freely; the one thing you may not do is offer a competing commercial product or service built on it. Each release becomes Apache 2.0 two years after it is published.
+
+The CMA protocol specification in [`docs/design/`](docs/design/) is licensed under [CC BY 4.0](docs/design/LICENSE.txt): implement it in any tool, with attribution.

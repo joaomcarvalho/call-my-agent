@@ -2,7 +2,14 @@
   "name": "call-my-agent",
   "version": "0.1.0",
   "description": "Let your coding agent call a teammate's coding agent to negotiate an API contract or plan, with E2EE transport, a quarantined call session and human-only sign-off.",
-  "author": { "name": "call-my-agent" },
-  "license": "MIT",
-  "keywords": ["agents", "negotiation", "api-contract", "mcp"]
+  "author": {
+    "name": "call-my-agent"
+  },
+  "license": "FSL-1.1-ALv2",
+  "keywords": [
+    "agents",
+    "negotiation",
+    "api-contract",
+    "mcp"
+  ]
 }
