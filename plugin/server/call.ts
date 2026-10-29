@@ -197,8 +197,8 @@ export class CallRuntime {
   }
 
   /** Signs, validates against the current replay, seals and sends; resolves once the relay echo is in the log. */
-  send(type: MessageType, body: object): Promise<Envelope> {
-    return this.exclusive(() => this.sendNow(type, body));
+  send(type: MessageType, body: object, floor?: 'hold'): Promise<Envelope> {
+    return this.exclusive(() => this.sendNow(type, body, floor));
   }
 
   /** Plan at `version`, replaying log prefixes for past versions. */
@@ -245,7 +245,7 @@ export class CallRuntime {
     return welcomedAt !== null && now > Date.parse(welcomedAt) + charter.budgets.ttl_s * 1000;
   }
 
-  private build(type: MessageType, body: object, r: ReplayResult): Envelope {
+  private build(type: MessageType, body: object, r: ReplayResult, floor?: 'hold'): Envelope {
     const { agent, profile } = this.identity;
     return signEnvelope(
       {
@@ -258,6 +258,7 @@ export class CallRuntime {
         ack: { A: r.lastSeq.A, B: r.lastSeq.B },
         ts: new Date().toISOString(),
         type,
+        ...(floor ? { floor } : {}),
         body: JSON.parse(JSON.stringify(body)) as Record<string, unknown>,
       },
       agent.secretKey,
@@ -279,10 +280,10 @@ export class CallRuntime {
     return echoed;
   }
 
-  private async sendNow(type: MessageType, body: object): Promise<Envelope> {
+  private async sendNow(type: MessageType, body: object, floor?: 'hold'): Promise<Envelope> {
     if (this.stopped) throw new ToolError('INVALID_STATE', 'this call is no longer running on this server');
     const r = this.current();
-    const env = this.build(type, body, r);
+    const env = this.build(type, body, r, floor);
     const verdict = validateNext(r, env, this.replayOptions());
     if (!verdict.ok) {
       this.audit({ kind: 'send_refused', type, code: verdict.code, detail: verdict.detail });

@@ -63,7 +63,7 @@ export const EnvelopeSchema = z
       })
       .strict()
       .optional(),
-    body: z.record(z.unknown()),
+    body: z.record(z.string(), z.unknown()),
     sig: z.object({ alg: z.literal('Ed25519'), kid: keyId, value: z.string().min(1) }).strict(),
     relay_seq: z.number().int().nonnegative().optional(),
   })

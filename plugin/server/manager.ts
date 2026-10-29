@@ -104,6 +104,7 @@ export interface SessionInput {
 export interface SayInput extends SessionInput {
   text: string;
   evidence?: Evidence[];
+  keep_floor?: boolean;
 }
 export interface ProposeInput extends SessionInput {
   patch: JsonPatchOp[];
@@ -118,6 +119,7 @@ export interface RespondInput extends SessionInput {
   kinds?: DecisionKind[];
   rationale?: string;
   checkpoint_ref?: string;
+  keep_floor?: boolean;
 }
 export interface CheckpointInput extends SessionInput {
   question: string;
@@ -147,6 +149,10 @@ interface Opening {
 
 function newSessionId(): string {
   return `ses_${Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => BASE32[b % 32]).join('')}`;
+}
+
+function holdFloor(input: { keep_floor?: boolean }): 'hold' | undefined {
+  return input.keep_floor ? 'hold' : undefined;
 }
 
 function withVersionTest(patch: JsonPatchOp[], version: number): JsonPatchOp[] {
@@ -457,7 +463,7 @@ export class CallManager {
 
   async say(input: SayInput): Promise<ToolResult> {
     const rt = this.runtime(input.session);
-    await rt.send('say', { text: input.text, ...(input.evidence && input.evidence.length > 0 ? { evidence: input.evidence } : {}) });
+    await rt.send('say', { text: input.text, ...(input.evidence && input.evidence.length > 0 ? { evidence: input.evidence } : {}) }, holdFloor(input));
     return this.base(rt);
   }
 
@@ -483,12 +489,13 @@ export class CallManager {
     if (!target) throw new ToolError('NO_SUCH_PROPOSAL', 'there is no pending proposal or sign-off request');
     const reasons = (input.reasons ?? []).map((reason) => (typeof reason === 'string' ? { text: reason } : reason));
     const ref = input.checkpoint_ref ? { checkpoint_ref: input.checkpoint_ref } : {};
+    const floor = holdFloor(input);
     if (input.action === 'accept') {
-      await rt.send('accept', { proposal: target.id, result_hash: target.result, ...ref });
+      await rt.send('accept', { proposal: target.id, result_hash: target.result, ...ref }, floor);
       return { ...this.base(rt), plan_hash: rt.result.planHash };
     }
     if (input.action === 'reject') {
-      await rt.send('reject', { proposal: target.id, reasons });
+      await rt.send('reject', { proposal: target.id, reasons }, floor);
       return this.base(rt);
     }
     if (!input.patch || input.rationale === undefined) throw new ToolError('BAD_PATCH', 'counter needs a patch and a rationale');
@@ -499,7 +506,7 @@ export class CallManager {
       kinds: input.kinds ?? [],
       rationale: input.rationale,
       ...ref,
-    });
+    }, floor);
     return { ...this.base(rt), proposal: env.id, result_hash: rt.result.pending?.resultHash ?? null };
   }
 

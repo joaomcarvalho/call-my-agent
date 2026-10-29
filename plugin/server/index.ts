@@ -18,6 +18,10 @@ const patchOp = z.object({
 });
 const patch = z.array(patchOp).describe('RFC 6902 JSON Patch against the current plan; a leading test of /version is added if missing');
 const checkpointRef = z.string().describe('checkpoint_ref returned by cma_answer_checkpoint');
+const keepFloor = z
+  .boolean()
+  .optional()
+  .describe('Keep the floor to send another message right after this one; at most 3 floor messages in a row, the last must pass it');
 
 function ok(result: ToolResult): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(result) }] };
@@ -83,6 +87,7 @@ export function createServer(manager: CallManager): McpServer {
         session,
         text: z.string().min(1),
         evidence: z.array(z.object({ ref: z.string().describe('path:line'), commit: z.string().optional() })).optional(),
+        keep_floor: keepFloor,
       },
     },
     (args) => run(() => manager.say(args)),
@@ -115,6 +120,7 @@ export function createServer(manager: CallManager): McpServer {
         kinds: z.array(decisionKind).optional(),
         rationale: z.string().optional(),
         checkpoint_ref: checkpointRef.optional(),
+        keep_floor: keepFloor,
       },
     },
     (args) => run(() => manager.respond({ ...args, patch: args.patch as JsonPatchOp[] | undefined })),
