@@ -113,7 +113,7 @@ HTTP, JSON bodies:
 - `POST /v1/rooms` `{secret_hash: hex sha256 of the secret bytes, creator_key: KeyId, ttl_s ≤ 259200}` → 201 `{room, creator_token}`. Room id = `r` + 16 random base32 chars (lowercase). At most 20 creations per minute per client IP, else 429.
 - `POST /v1/rooms/:room/join` `{secret: b64url, member_key: KeyId, ts?, proof?}` → 200 `{member_token}`. 403 wrong secret, 409 a different key already joined, 410 expired, 404 unknown room. A first join of a key needs only the secret. Joining with a key that is already a member is a seat resume and also needs `ts` and `proof` (below), else 403. A resume issues a fresh token and invalidates the previous one.
 - `POST /v1/rooms/:room/resume` `{member_key, ts, proof}` → 200 `{member_token}`. Resume without the secret (the creator's path). 403 for a non-member key or a bad proof; 404/410 as for join.
-- Resume proof: `proof` is the base64url Ed25519 signature, by `member_key`, over the UTF-8 string `cma-relay-resume|<room>|<ts>`; `ts` is an ISO timestamp within ±5 minutes of the relay clock.
+- Resume proof: `proof` is the base64url Ed25519 signature, by `member_key`, over the UTF-8 string `cma-relay-resume|<room>|<secret_hash hex>|<ts>`, where `secret_hash` is the room's stored secret hash (lowercase hex sha256 of the secret bytes, as sent at creation); `ts` is an ISO timestamp within ±5 minutes of the relay clock. A proof made for another secret hash, another room or the old `cma-relay-resume|<room>|<ts>` form is 403.
 - Tokens are 32 random bytes b64url; the relay stores only their sha256.
 
 WebSocket `GET /v1/rooms/:room/ws?token=<token>`; JSON text frames:
@@ -124,7 +124,7 @@ WebSocket `GET /v1/rooms/:room/ws?token=<token>`; JSON text frames:
 - R→C `{t:"error", code, detail}` with codes `TOO_LARGE` (payload > 262144 bytes), `RATE_LIMITED` (> 30 sends/min per member), `ROOM_FULL` (the room already holds 2 000 messages or 50 MB of payload), `EXPIRED`, `BAD_FRAME`.
 - Max 2 members per room (creator + one joiner). Retention: rooms past `expires_at + 7 days` may be deleted.
 
-`RelayClient` (packages/relay/src/client.ts): static `createRoom`, `joinRoom(relayUrl, room, {secret, memberKey, sign?})`, `resumeSeat(relayUrl, room, {memberKey, sign})` (`sign(bytes) => base64url` signs with the member's key); instance `connect()`, `send(msgId, payload) → Promise<{relay_seq, dup}>`, `ack(cursor)`, `close()`; callbacks `onMessage(msg)`, `onPresence(p)`; auto-reconnect with backoff, `sync` from the last seen relay_seq after every (re)connect (repeating while `more`), and unconfirmed sends are retried after reconnect (dedup makes this safe).
+`RelayClient` (packages/relay/src/client.ts): static `createRoom`, `joinRoom(relayUrl, room, {secret, memberKey, sign?})` (pass `sign` only to re-take a seat the key already holds; a first join sends no `ts`/`proof`), `resumeSeat(relayUrl, room, {memberKey, secretHash, sign})` (`sign(bytes) => base64url` signs with the member's key), `resumeProofBytes(room, secretHash, ts)`; instance `connect()`, `send(msgId, payload) → Promise<{relay_seq, dup}>`, `ack(cursor)`, `close()`; callbacks `onMessage(msg)`, `onPresence(p)`; auto-reconnect with backoff, `sync` from the last seen relay_seq after every (re)connect (repeating while `more`), and unconfirmed sends are retried after reconnect (dedup makes this safe). `RelayHttpError` (`status`) and `RelayError` (`code`) have fixed messages, `relay refused the request (HTTP <status>)` and `relay error <CODE>` (`CODE` when it matches `^[A-Z_]{1,32}$`, else `UNKNOWN`); the relay's own text is only in their `detail`.
 
 ## 4. Plugin (plugin/)
 
@@ -137,15 +137,22 @@ Root `CMA_HOME` env var, else `${CLAUDE_PLUGIN_DATA}`, else `~/.call-my-agent`.
 <root>/calls/<session>/call.json      {session, party, relay, room, token, secret, invite, charter_hash, x25519_secret, peer?, cursor, repo_root}
 <root>/calls/<session>/log.jsonl      verified envelopes in relay order (with relay_seq)
 <root>/calls/<session>/signoff.json   written by `cma approve`: SignoffBody
-<root>/calls/<session>/audit.jsonl    append-only: sends, receives, hook verdicts, checkpoints
+<root>/calls/<session>/audit.jsonl    append-only: sends, receives, hook verdicts, checkpoints, raw relay error text
+<root>/calls/<session>/owner.lock     {pid, started_at, owner}: the one server that owns the call (below)
+<root>/pending/<session>.json         {session, relay, room, token}: the relay seat taken at inspect, until the join
 <root>/session-env.json               {socket, token} written by the SessionStart hook
 ```
+
+**Call sessions and ownership.** `cma session` exports `CMA_CALL_SESSION=1` (in `--exec` and in the printed command). A server started without it lists its tools but answers every tool with the fixed error `NOT_CALL_SESSION` (detail: "call-my-agent tools only work in a call session. Ask your human to start one in a terminal with `cma session <dir> --exec`."). It attaches no calls and never injects. A call-session server takes `owner.lock` before it attaches a call (at startup, `cma_start_call`, `cma_join_call`, or the first tool call that names a call on disk). The lock is created exclusively (written to a temp file, then hard-linked into place) and holds the server's pid, process start time and a per-server random `owner`. A lock whose pid is dead, or that does not parse, is stale and is taken over (under a short-lived `owner.lock.break` so two servers cannot both take it). A call whose lock a live process holds is not loaded or listed; a tool naming it fails with `UNKNOWN_CALL` "owned by another session". A server removes its locks when it closes.
+
+**Relay seats.** A first join of an invite sends no resume proof. A seat this key already holds is resumed (`resumeSeat`, proof bound to the invite secret's hash) only on the relay URL recorded for the session in `pending/<session>.json` or `call.json`, never on a URL that only the invite names. Relay failures reach the model only as the fixed strings of §3; the relay's text goes to `audit.jsonl` when the call exists.
 
 ### 4.2 Inbound delivery
 Verified (M0, Claude Code 2.1.312): a stdio MCP server launched by Claude Code receives that session's own `CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN` (and `CLAUDE_PROJECT_DIR`), so the server can inject directly; `session-env.json` is the fallback.
 
 1. Socket: `CLAUDE_CODE_MESSAGING_SOCKET` / `CLAUDE_CODE_MESSAGING_TOKEN` from the server's env, else from `<root>/session-env.json`. Connect, write `{"type":"auth","token":<token>}\n` then `{"type":"user","message":{"role":"user","content":<text>}}\n`, then close. Batch messages that arrive within 1.5 s into one injection.
 2. Fallback: queue in memory; `cma_wait` / `cma_inbox` return them; every tool result appends `pending_inbound: <n>` when the queue is non-empty.
+3. Wake rules. Floor messages (`say`, `propose`, `counter`, `accept`, `reject`) are injected and end a `cma_wait`. Control messages `error`, `ask_user_pending`, `user_answer_summary`, `heartbeat` and `bye` never start an injection or end a `cma_wait` on their own: they are queued and ride along with the next injection or `cma_wait` result. Any other peer message wakes like a floor message, except that after 10 consecutive peer messages without a floor message nothing is injected or wakes a `cma_wait` until a floor message arrives (the messages stay queued). `session_open` and `heartbeat` are not delivered at all.
 
 Injected text format (peer content always fenced as data):
 ```
@@ -160,7 +167,7 @@ Next: use the negotiate skill. Reply with cma_* tools only.
 ### 4.3 MCP tools (server name `cma`)
 All take/return JSON; every result includes `state`, `floor`, `version`. Errors are tool errors with the protocol `ErrorCode`.
 - `cma_start_call({peer, topic, type="contract", mode="org", share_set?: string[]})` → `{session, invite, code, fingerprint}`
-- `cma_inspect_invite({invite})` → charter summary, inviter identity, fingerprint, mode, share set (no join)
+- `cma_inspect_invite({invite})` → `type`, `mode`, `fingerprint`, `inviter: {fingerprint, assurance}`, budgets, checkpoint kinds, `expires_at`, `problems`, and `charter`: a one-line note followed by a `<counterparty_data call="<session>">` block holding `topic:`, `inviter: <human> (<org or EXTERNAL>)`, `invitee_label:` and `share_set:` with one `- <entry>` line each (no join). An invite whose charter has more than 20 share-set entries, a share-set entry over 200 characters, a topic over 200 characters or an invitee label over 100 characters is refused with `BAD_INVITE` by inspect and join; `cma_start_call` refuses the same inputs locally.
 - `cma_join_call({invite})` → `{session, peer, fingerprint, four_words}`
 - `cma_say({session, text, evidence?})`
 - `cma_propose({session, patch, kinds?, rationale, checkpoint_ref?})` — the server prepends the `/version` test op if missing
@@ -173,7 +180,7 @@ All take/return JSON; every result includes `state`, `floor`, `version`. Errors 
 - `cma_status({session?})` and `cma_list_calls()`
 - `cma_wait({session, timeout_s ≤ 300})` / `cma_inbox({session})`
 - `cma_hangup({session, reason})`
-- `cma_write_plan({session})` — only in `AGREED`; writes `docs/agreements/<date>-<slug>.md` under `repo_root`; returns path and hashes.
+- `cma_write_plan({session})` — only in `AGREED`; writes `docs/agreements/<date>-<slug>.md` under `repo_root` (§4.5 collision rule); returns path and hashes.
 There is **no** tool that produces a `signoff`. The server sends a `signoff` only after it finds `signoff.json` written by `cma approve` and validates it.
 
 ### 4.4 Sign-off flow
@@ -182,7 +189,7 @@ There is **no** tool that produces a `signoff`. The server sends a `signoff` onl
 3. The server watches the call dir, validates, sends `signoff`.
 
 ### 4.5 Agreement file
-`docs/agreements/<YYYY-MM-DD from charter.created_at>-<slug of title>.md`, byte-identical on both sides:
+`docs/agreements/<YYYY-MM-DD from charter.created_at>-<slug of title>.md`, byte-identical on both sides. Never overwritten: the file is created exclusively (`wx`); if it exists and is byte-identical the write succeeds, otherwise the server writes `<date>-<slug>-<first 8 chars of the session id>.md` the same way, and refuses (`INVALID_STATE`) when that one also holds different bytes.
 ```
 ---
 cma: 0.1

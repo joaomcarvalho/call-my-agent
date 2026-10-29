@@ -203,9 +203,9 @@ async function session(root: string, args: string[]): Promise<number> {
 
   const argv = ['claude', '--settings', settingsPath, '--plugin-dir', PLUGIN_DIR, ...passthrough];
   const quote = (s: string): string => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
-  out(`cd ${quote(dir)} && CMA_HOME=${quote(resolve(root))} ${argv.map(quote).join(' ')}`);
+  out(`cd ${quote(dir)} && CMA_HOME=${quote(resolve(root))} CMA_CALL_SESSION=1 ${argv.map(quote).join(' ')}`);
   if (!values.exec) return 0;
-  const child = spawn(argv[0]!, argv.slice(1), { cwd: dir, stdio: 'inherit', env: { ...process.env, CMA_HOME: resolve(root) } });
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: dir, stdio: 'inherit', env: { ...process.env, CMA_HOME: resolve(root), CMA_CALL_SESSION: '1' } });
   return new Promise<number>((done) => {
     child.on('error', (e) => {
       err(`cma: ${e.message}`);

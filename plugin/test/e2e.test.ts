@@ -40,7 +40,7 @@ describe('full call between two managers', () => {
     const { session, started, joined, inspected } = await connect(alice, bob);
     expect(started.code).toMatch(/^CMA-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
     expect(inspected.problems).toEqual([]);
-    expect(inspected.topic).toBe(TOPIC);
+    expect(inspected.charter as string).toContain(`<counterparty_data call="${session}">\ntopic: ${TOPIC}\n`);
     expect(inspected.fingerprint).toBe(started.fingerprint);
     expect(joined.fingerprint).toBe(started.fingerprint);
     const aliceKey = alice.manager.identity().agent.keyId;

@@ -1,12 +1,29 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { join } from 'node:path';
+import type { MessageType } from '@cma/protocol';
 import { formatInjection, type InjectionHeader } from './format.ts';
 import type { AuditRecord } from './store.ts';
 
 export interface InboxItem {
   relay_seq: number;
   line: string;
+}
+
+/**
+ * How a peer message may wake the session: `floor` and `other` messages are injected, `quiet` ones only ride
+ * along with the next injection or `cma_wait`.
+ */
+export type Wake = 'floor' | 'other' | 'quiet';
+
+const FLOOR_TYPES: ReadonlySet<MessageType> = new Set(['say', 'propose', 'counter', 'accept', 'reject']);
+const QUIET_TYPES: ReadonlySet<MessageType> = new Set(['error', 'ask_user_pending', 'user_answer_summary', 'heartbeat', 'bye']);
+/** Peer messages in a row without a floor message that may still be injected. */
+export const MAX_WAKES_WITHOUT_FLOOR = 10;
+
+export function wakeOf(type: MessageType): Wake {
+  if (FLOOR_TYPES.has(type)) return 'floor';
+  return QUIET_TYPES.has(type) ? 'quiet' : 'other';
 }
 
 export interface SocketConfig {
@@ -84,6 +101,7 @@ export class Inbox {
   private readonly batch = new Map<string, InboxItem[]>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly waiters = new Map<string, Set<Waiter>>();
+  private readonly sinceFloor = new Map<string, number>();
   private readonly batchMs: number;
   private closed = false;
 
@@ -91,8 +109,18 @@ export class Inbox {
     this.batchMs = opts.batchMs ?? 1500;
   }
 
-  push(session: string, item: InboxItem): void {
+  /**
+   * Queues a peer message. Only a `floor` message, or one of the first MAX_WAKES_WITHOUT_FLOOR messages since the
+   * last one that is not `quiet`, ends a `cma_wait` or starts an injection; the rest wait for the next of those.
+   */
+  push(session: string, item: InboxItem, wake: Wake = 'floor'): void {
     if (this.closed) return;
+    const run = wake === 'floor' ? 0 : (this.sinceFloor.get(session) ?? 0) + 1;
+    this.sinceFloor.set(session, run);
+    if (wake === 'quiet' || run > MAX_WAKES_WITHOUT_FLOOR) {
+      this.queued.set(session, [...(this.queued.get(session) ?? []), item]);
+      return;
+    }
     if (this.waiters.get(session)?.size) {
       this.release(session, [...this.take(session), item].sort(bySeq));
       return;

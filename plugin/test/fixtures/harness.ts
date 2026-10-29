@@ -1,10 +1,34 @@
 import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSignoff, hexToBytes, sha256Hash, type Artifact, type Hash, type JsonPatchOp, type Party } from '@cma/protocol';
-import { startRelay } from '@cma/relay';
-import { CallManager, type CallManagerOptions, type ToolResult } from '../../server/manager.ts';
+import {
+  DEFAULT_BUDGETS,
+  PROTOCOL_VERSION,
+  base64urlEncode,
+  createPlanV0,
+  createSignoff,
+  deriveBootstrapKey,
+  encodeInvite,
+  generateJoinSecret,
+  generateSigningKey,
+  generateX25519,
+  hashObject,
+  hexToBytes,
+  planHash,
+  sealEnvelope,
+  secretHash,
+  sha256Hash,
+  signEnvelope,
+  type Artifact,
+  type Charter,
+  type Hash,
+  type JsonPatchOp,
+  type Party,
+} from '@cma/protocol';
+import { RelayClient, startRelay } from '@cma/relay';
+import { CHECKPOINT_KINDS, CallManager, type CallManagerOptions, type ToolResult } from '../../server/manager.ts';
 import { callPaths, identityPaths, type Profile } from '../../server/store.ts';
 
 export const PROFILES: Record<string, Profile> = {
@@ -58,6 +82,7 @@ export class Harness {
       repoRoot: repo,
       relayUrl: this.relay.url,
       env: {},
+      assumeCallSession: true,
       profile: PROFILES[name] ?? { human: name },
       ...opts,
     });
@@ -238,4 +263,87 @@ export async function freezeSimplePlan(alice: Side, bob: Side, session: string):
   await waitFor(() => status(bob, session).signoff_request !== null, 'signoff request at bob');
   await bob.manager.respond({ session, action: 'accept' });
   await waitFor(() => status(alice, session).state === 'FROZEN' && status(bob, session).state === 'FROZEN', 'both FROZEN');
+}
+
+// ---------------------------------------------------------------- hostile peers and the messaging socket
+
+/** Opens a room whose session_open carries a charter built from `overrides`, with none of the limits a manager applies. */
+export async function craftedInvite(relayUrl: string, overrides: Partial<Charter> = {}): Promise<{ invite: string; session: string }> {
+  const agent = generateSigningKey();
+  const x = generateX25519();
+  const secret = generateJoinSecret();
+  const session = `ses_crafted${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const created = Date.now();
+  const charter: Charter = {
+    session,
+    topic: 'Crafted call',
+    type: 'contract',
+    mode: 'org',
+    template: 'contract',
+    inviter: { agent_key: agent.keyId, human_key: generateSigningKey().keyId, human: 'mallory', org: 'elsewhere', assurance: 'self_asserted', x25519: x.publicHex },
+    invitee_label: 'bob',
+    share_set: [],
+    budgets: DEFAULT_BUDGETS.org,
+    checkpoint_kinds: CHECKPOINT_KINDS,
+    created_at: new Date(created).toISOString(),
+    expires_at: new Date(created + 3600_000).toISOString(),
+    ...overrides,
+  };
+  const charterHash = hashObject(charter);
+  const plan = createPlanV0(charter, charterHash, charter.invitee_label);
+  const { room, token } = await RelayClient.createRoom(relayUrl, { secretHash: secretHash(secret), creatorKey: agent.keyId, ttlS: 7200 });
+  const env = signEnvelope(
+    {
+      v: PROTOCOL_VERSION,
+      session,
+      from: { party: 'A', agent_key: agent.keyId, human: 'mallory', org: 'elsewhere' },
+      to: ['B'],
+      seq: 1,
+      prev: null,
+      ack: { A: 0, B: 0 },
+      ts: new Date().toISOString(),
+      type: 'session_open',
+      body: { charter, charter_hash: charterHash, plan_v0: plan, plan_v0_hash: planHash(plan) } as Record<string, unknown>,
+    },
+    agent.secretKey,
+  );
+  const client = new RelayClient({ relayUrl, room, token, onMessage: () => {} });
+  await client.connect();
+  try {
+    await client.send(env.id, sealEnvelope(env, deriveBootstrapKey(secret, session), 0));
+  } finally {
+    await client.close();
+  }
+  const invite = encodeInvite({ v: 1, relay: relayUrl, room, session, secret: base64urlEncode(secret), fp: agent.keyId, charter_hash: charterHash, exp: charter.expires_at });
+  return { invite, session };
+}
+
+export interface FakeMessagingSocket {
+  path: string;
+  /** The user message content of every injection, in arrival order. */
+  injected: string[];
+  env: Record<string, string>;
+  close(): Promise<void>;
+}
+
+/** A unix socket that records what the plugin injects through the Claude Code messaging socket. */
+export async function fakeMessagingSocket(dir: string): Promise<FakeMessagingSocket> {
+  const path = join(dir, `msg-${Math.random().toString(36).slice(2, 8)}.sock`);
+  const injected: string[] = [];
+  const server: Server = createServer((sock) => {
+    let data = '';
+    sock.on('data', (chunk) => (data += chunk.toString('utf8')));
+    sock.on('end', () => {
+      const user = data.split('\n').find((line) => line.includes('"type":"user"'));
+      if (user) injected.push((JSON.parse(user) as { message: { content: string } }).message.content);
+      sock.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(path, resolve));
+  return {
+    path,
+    injected,
+    env: { CLAUDE_CODE_MESSAGING_SOCKET: path, CLAUDE_CODE_MESSAGING_TOKEN: 'test-token' },
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 }

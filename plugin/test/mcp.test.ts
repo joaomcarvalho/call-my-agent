@@ -36,7 +36,7 @@ afterEach(async () => {
 async function connected(): Promise<Client> {
   const home = mkdtempSync(join(tmpdir(), 'cma-mcp-'));
   cleanups.push(() => rmSync(home, { recursive: true, force: true }));
-  const manager = new CallManager({ home, env: {}, repoRoot: home });
+  const manager = new CallManager({ home, env: {}, assumeCallSession: true, repoRoot: home });
   cleanups.push(() => manager.close());
   await manager.init();
   const server = createServer(manager);
