@@ -132,6 +132,16 @@ describe('calls driven through the plugin managers', () => {
     expect(run.stdout.split('\n').find((l) => l.includes(discussing))).toContain('DISCUSSING');
   });
 
+  test('invite prints the caller’s full invite by short code and refuses on the joining side', async () => {
+    const record = readCallRecord(alice.home, frozen);
+    const a = await cma(['--home', alice.home, 'invite', inviteCode(record.room)]);
+    expect(a.code).toBe(0);
+    expect(a.stdout.trim()).toBe(record.invite);
+    expect(a.stdout.trim().startsWith('cma1.')).toBe(true);
+    const b = await cma(['--home', bob.home, 'invite', frozen]);
+    expect(b.code).toBe(1);
+  });
+
   describe('verify', () => {
     const verifyText = async (text: string, extra: string[] = []): Promise<Run> => {
       const file = join(tmp(), 'agreement.md');

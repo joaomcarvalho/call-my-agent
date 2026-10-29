@@ -35,7 +35,8 @@ const USAGE = `usage: cma [--home <dir>] <command>
   verify <file.md> [--expect A=<key>] [--expect B=<key>]
   relay [--port 8787] [--db path] [--host 127.0.0.1]
   session [dir] [--exec] [-- <claude args>]
-  calls`;
+  calls
+  invite <session|CMA-code>`;
 
 class CliError extends Error {}
 
@@ -229,6 +230,15 @@ function calls(root: string): number {
   return 0;
 }
 
+function invite(root: string, args: string[]): number {
+  const ref = args[0];
+  if (!ref) fail('usage: cma invite <session|CMA-code>');
+  const record = findCall(root, ref);
+  if (record.party !== 'A') fail(`call ${record.session} was joined, not started, here; only the caller holds its invite`);
+  out(record.invite);
+  return 0;
+}
+
 /** Removes the global `--home <dir>` / `--home=<dir>` flag (only before a `--` separator). */
 function takeHome(argv: string[]): { home: string | undefined; rest: string[] } {
   const rest: string[] = [];
@@ -266,6 +276,8 @@ export async function main(argv: string[], env: Record<string, string | undefine
         return await session(root, args);
       case 'calls':
         return calls(root);
+      case 'invite':
+        return invite(root, args);
       default:
         err(`cma: unknown command ${JSON.stringify(command)}\n${USAGE}`);
         return 1;

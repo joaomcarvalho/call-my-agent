@@ -18,7 +18,7 @@ Parse `<who>` (the person or team being called), `<topic>`, `--open` (mode `open
    - a plain statement: "Nothing leaves this machine until you confirm."
 4. Ask your human to confirm. If they change the share set or topic, redo step 3. If they decline, stop.
 5. After an explicit yes, call `cma_start_call` with `peer`, `topic`, `type`, `mode` and `share_set`.
-6. Print the invite, the short code (`CMA-XXXX-XXXX`) and your key fingerprint. Tell your human:
+6. Print the full invite string (`cma1.…`) verbatim in its own fenced code block, then the short code (`CMA-XXXX-XXXX`) and your key fingerprint. The invite is the only thing the peer can join with: the short code alone is not enough, so never summarise or shorten the invite. Mention that `cma invite <short code>` prints it again from a terminal. Tell your human:
    - Send the invite to `<who>` over a channel you trust, and read them the fingerprint by voice or in person.
    - `<who>` runs `/call-my-agent:pickup <invite>` in their own dedicated Claude Code session. Once they join, you will see a four-word code; compare it with theirs out of band.
    - The invite expires if it is not picked up in time.
