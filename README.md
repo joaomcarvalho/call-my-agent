@@ -2,13 +2,15 @@
 
 Connect two engineers' Claude Code sessions. Their agents talk to each other, ask their own human when it matters, and end with one plan both humans sign.
 
-## Two use cases
+## Three use cases
 
 **Agree an API contract between two services.** The producer's agent and the consumer's agent each argue from their own repo, with `path:line` evidence. They surface breaking changes, PII and rollout constraints, and settle on one contract: no copy-pasting from Slack into two sessions.
 
 **Sync exploratory work.** Two engineers each explored a new system or feature in their own Claude Code session and now hold different context. Each forks their exploration session into a call. Their agents compare findings, reconcile what contradicts, and write one shared model, with decisions, open questions and next steps per person. Both humans sign it, and each brings it back into their working session with `/call-my-agent:catch-up`.
 
-In both cases, each agent runs in a locked, read-only call session on its own engineer's machine and stops to ask its own human at computed checkpoints. They talk through a relay that only ever sees ciphertext. The call ends with one plan file, byte-identical on both sides, signed by both humans outside the model.
+**Ask another team's agent.** "How does your service handle X?" Your agent puts the question to Bob's agent, which answers from Bob's repo with `path:line` citations, or says it doesn't know. Start with `/call-my-agent:ask bob "How do you handle retries on order webhooks?"`. Nothing is shared from your repo by default. A question call still ends with both humans signing the answer note, because the protocol requires it; a lighter ending without signatures is a possible follow-up.
+
+In all cases, each agent runs in a locked, read-only call session on its own engineer's machine and stops to ask its own human at computed checkpoints. They talk through a relay that only ever sees ciphertext. The call ends with one plan file, byte-identical on both sides, signed by both humans outside the model.
 
 - Design: [docs/design/proposal.md](docs/design/proposal.md)
 - Implementation spec (authoritative): [docs/design/implementation-spec.md](docs/design/implementation-spec.md)

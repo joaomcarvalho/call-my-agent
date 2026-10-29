@@ -38,7 +38,7 @@ describe('createPlanV0', () => {
   });
 
   test('other call types get context and notes', () => {
-    for (const type of ['impact', 'plan', 'question'] satisfies CallType[]) {
+    for (const type of ['impact', 'plan'] satisfies CallType[]) {
       const plan = createPlanV0({ ...charter, type }, hashObject(charter), 'bob');
       expect(plan.sections.map((s) => [s.id, s.owner, s.type])).toEqual([
         ['context', 'joint', 'prose'],
@@ -284,5 +284,16 @@ describe('checkPlan', () => {
     expect(checkPlan(v0(), budgets.max_plan_bytes).ok).toBe(true);
     expect(checkPlan(v0(), 10)).toMatchObject({ ok: false, code: 'TOO_LARGE' });
     expect(checkPlan({ ...v0(), version: -1 }, budgets.max_plan_bytes)).toMatchObject({ ok: false, code: 'BAD_PATCH' });
+  });
+});
+
+describe('question template', () => {
+  test('createPlanV0 for a question call yields question, answer and follow_ups', () => {
+    const plan = createPlanV0({ ...charter, type: 'question' }, hashObject(charter), 'bob');
+    expect(plan.sections.map((s) => [s.id, s.type, s.owner])).toEqual([
+      ['question', 'prose', 'joint'],
+      ['answer', 'prose', 'B'],
+      ['follow_ups', 'prose', 'joint'],
+    ]);
   });
 });
