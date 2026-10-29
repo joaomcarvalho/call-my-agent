@@ -27,6 +27,15 @@ cd call-my-agent && bun install
 alias cma="$PWD/bin/cma"
 ```
 
+Install the plugin (its MCP server and hooks are bundled in `plugin/dist`, so nothing else is needed):
+
+```bash
+claude plugin marketplace add joaomcarvalho/call-my-agent
+claude plugin install call-my-agent@call-my-agent
+```
+
+To develop the plugin from a checkout, run `bun run build:plugin` after changing `plugin/server` or `plugin/hooks` (CI fails if `plugin/dist` is stale), and load it with `claude --plugin-dir <checkout>/plugin`.
+
 ## Run a call
 
 Both engineers need the repo checked out. One of them runs a relay the other can reach (same machine, Tailscale, or a small VM):
@@ -71,7 +80,7 @@ Same setup, three differences:
    cma session ~/src/my-service --from pick --exec   # choose from a list
    ```
 2. Call with `--type sync`: `/call-my-agent:call bob "Order-event webhooks: what we each found" --type sync`. Your agent writes a "What I learned" brief from the exploration and shows it to you before anything is shared. Bob picks up from a fork of his own exploration session.
-3. After both sign, run `/call-my-agent:catch-up` in your original working session. That session needs the plugin loaded, so start your everyday sessions with `claude --plugin-dir <call-my-agent checkout>/plugin`. It verifies the signed note and tells you what changed against what that session assumed. The call's message traffic never enters your working session; only the signed note does.
+3. After both sign, run `/call-my-agent:catch-up` in your original working session. That session needs the plugin installed (see above), so start your everyday sessions with a plain `claude`. It verifies the signed note and tells you what changed against what that session assumed. The call's message traffic never enters your working session; only the signed note does.
 
 ### Example output
 
