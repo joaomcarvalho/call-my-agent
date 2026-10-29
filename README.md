@@ -36,6 +36,8 @@ Each engineer starts a **locked call session** in their own repo. It denies edit
 CMA_RELAY_URL=http://<relay>:8787 cma session ~/src/orders-service --exec
 ```
 
+`--exec` launches `claude` with your current environment. To use a specific Claude Code account or config, set it for that command, e.g. `CLAUDE_CONFIG_DIR=$HOME/.claude-personal cma session ~/src/orders-service --exec`.
+
 Then, in Claude Code:
 
 | Who | Does |
