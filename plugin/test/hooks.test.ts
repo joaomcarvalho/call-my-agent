@@ -1,9 +1,14 @@
-import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const hooksDir = join(import.meta.dir, '..', 'hooks');
+
+const tempDirs: string[] = [];
+afterAll(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
 const TOOL = 'mcp__plugin_call-my-agent_cma__cma_say';
 
 async function run(script: string, opts: { stdin?: unknown; env?: Record<string, string> } = {}) {
@@ -192,6 +197,7 @@ describe('disclosure hook fails closed', () => {
 
   test('exits 2 when the audit log cannot be written', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cma-ro-'));
+    tempDirs.push(home);
     mkdirSync(join(home, 'calls', 'sess-2', 'audit.jsonl'), { recursive: true });
     expect((await disclose({ session: 'sess-2', text: 'fine' }, { CMA_HOME: home })).code).toBe(2);
   });
@@ -236,6 +242,7 @@ describe('hooks.json matcher', () => {
 describe('disclosure hook audit', () => {
   test('appends block and allow verdicts to the call audit log without the secret', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cma-audit-'));
+    tempDirs.push(home);
     mkdirSync(join(home, 'calls', 'sess-1'), { recursive: true });
     const env = { CMA_HOME: home };
     await disclose({ session: 'sess-1', text: 'fine' }, env);
@@ -250,6 +257,7 @@ describe('disclosure hook audit', () => {
 describe('session-start hook', () => {
   test('writes session-env.json with mode 0600 and the right values', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cma-ss-'));
+    tempDirs.push(home);
     const r = await run('session-start.ts', {
       env: { CMA_HOME: home, CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/x.sock', CLAUDE_CODE_MESSAGING_TOKEN: 'tok123' },
     });
@@ -261,6 +269,7 @@ describe('session-start hook', () => {
 
   test('exits 0 and writes nothing without the env vars', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cma-ss-'));
+    tempDirs.push(home);
     const r = await run('session-start.ts', { env: { CMA_HOME: home } });
     expect(r.code).toBe(0);
     expect(existsSync(join(home, 'session-env.json'))).toBe(false);
@@ -268,6 +277,7 @@ describe('session-start hook', () => {
 
   test('prints a reminder of active calls as additional context', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cma-ss-'));
+    tempDirs.push(home);
     mkdirSync(join(home, 'calls', 'sess-9'), { recursive: true });
     await Bun.write(join(home, 'calls', 'sess-9', 'call.json'), JSON.stringify({ session: 'sess-9', party: 'A', peer: { human: 'bea' } }));
     const r = await run('session-start.ts', { env: { CMA_HOME: home } });

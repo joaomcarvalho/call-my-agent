@@ -40,8 +40,8 @@ import {
   type RejectReason,
 } from '@cma/protocol';
 import { RelayClient, RelayHttpError, type RelayMsg } from '@cma/relay';
-import { CallRuntime, ToolError, errorText, type RuntimeHooks } from './call.ts';
-import { badge, floorLabel, formatInjection, messageLine, sanitizeLabel, type InjectionHeader } from './format.ts';
+import { CallRuntime, ToolError, agentSigner, errorText, type RuntimeHooks } from './call.ts';
+import { badge, fencePlan, floorLabel, formatInjection, messageLine, sanitizeLabel, type InjectionHeader } from './format.ts';
 import { Inbox, type InboxItem } from './inbox.ts';
 import {
   SESSION_ID,
@@ -49,7 +49,10 @@ import {
   listSessions,
   loadOrCreateIdentity,
   readCallRecord,
+  readPendingJoin,
+  removePendingJoin,
   writeCallRecord,
+  writePendingJoin,
   type CallRecord,
   type LocalIdentity,
   type Profile,
@@ -168,7 +171,7 @@ function parseInvite(text: string): Invite {
 
 function relayJoinError(err: unknown): ToolError {
   if (err instanceof RelayHttpError) {
-    if (err.status === 403) return new ToolError('JOIN_PROOF_INVALID', 'the relay refused the invite secret');
+    if (err.status === 403) return new ToolError('JOIN_PROOF_INVALID', 'the relay refused the invite secret or the seat-resume proof');
     if (err.status === 404) return new ToolError('BAD_INVITE', 'the relay does not know this room');
     if (err.status === 409) return new ToolError('INVALID_STATE', 'another agent has already joined this call');
     if (err.status === 410) return new ToolError('INVALID_STATE', 'the call room has expired');
@@ -191,8 +194,6 @@ function openingMismatches(invite: Invite, opening: Opening): string[] {
 export class CallManager {
   readonly root: string;
   private readonly calls = new Map<string, CallRuntime>();
-  /** Relay seats taken by `inspectInvite`, reused by `joinCall` so the key joins the room once. */
-  private readonly seats = new Map<string, { relay: string; room: string; token: string }>();
   private readonly inbox: Inbox;
   private readonly relayUrl: string;
   private readonly repoRoot: string;
@@ -376,7 +377,7 @@ export class CallManager {
       repo_root: this.repoRoot,
     };
     writeCallRecord(this.root, record);
-    this.seats.delete(invite.session);
+    removePendingJoin(this.root, invite.session);
     const rt = this.attach(record);
     await rt.connect();
     await rt.send('hello', {
@@ -478,12 +479,13 @@ export class CallManager {
     const plan = input.version === undefined ? r.plan : rt.planAt(input.version);
     if (!plan) throw new ToolError('INVALID_STATE', input.version === undefined ? 'there is no plan yet' : `there is no plan version ${input.version}`);
     const markdown = renderMarkdown(plan);
+    const fenced = (content: string): string => fencePlan(rt.session, inviteCode(rt.record.room), plan.version, content);
     return {
       ...this.base(rt),
       plan_version: plan.version,
       plan_hash: planHash(plan),
       md_hash: sha256Hash(markdown),
-      ...(input.format === 'json' ? { plan } : { markdown }),
+      ...(input.format === 'json' ? { plan: fenced(JSON.stringify(plan)) } : { markdown: fenced(markdown) }),
     };
   }
 
@@ -584,26 +586,47 @@ export class CallManager {
     };
   }
 
-  private async fetchOpening(invite: Invite): Promise<Opening> {
+  /** Takes a relay seat for the invite (a first join, or a re-join with a resume proof) and records it as a pending join. */
+  private async takeSeat(invite: Invite, how: 'join' | 'resume'): Promise<string> {
     const id = this.identity();
-    const seat = this.seats.get(invite.session);
-    let token = seat && seat.relay === invite.relay && seat.room === invite.room ? seat.token : undefined;
-    if (!token) {
-      try {
-        ({ token } = await RelayClient.joinRoom(invite.relay, invite.room, { secret: invite.secret, memberKey: id.agent.keyId }));
-      } catch (err) {
-        throw relayJoinError(err);
-      }
-      this.seats.set(invite.session, { relay: invite.relay, room: invite.room, token });
+    const sign = agentSigner(id);
+    let token: string;
+    try {
+      ({ token } =
+        how === 'join'
+          ? await RelayClient.joinRoom(invite.relay, invite.room, { secret: invite.secret, memberKey: id.agent.keyId, sign })
+          : await RelayClient.resumeSeat(invite.relay, invite.room, { memberKey: id.agent.keyId, sign }));
+    } catch (err) {
+      throw relayJoinError(err);
     }
+    writePendingJoin(this.root, { session: invite.session, relay: invite.relay, room: invite.room, token });
+    return token;
+  }
+
+  private async readRoom(invite: Invite, token: string): Promise<RelayMsg[]> {
     const msgs: RelayMsg[] = [];
     const client = new RelayClient({ relayUrl: invite.relay, room: invite.room, token, onMessage: (m) => msgs.push(m) });
     try {
       await client.connect();
-    } catch (err) {
-      throw new ToolError('RELAY_UNAVAILABLE', errorText(err));
     } finally {
       await client.close();
+    }
+    return msgs;
+  }
+
+  private async fetchOpening(invite: Invite): Promise<Opening> {
+    const saved = readPendingJoin(this.root, invite.session);
+    let token = saved && saved.relay === invite.relay && saved.room === invite.room ? saved.token : await this.takeSeat(invite, 'join');
+    let msgs: RelayMsg[];
+    try {
+      msgs = await this.readRoom(invite, token);
+    } catch {
+      token = await this.takeSeat(invite, 'resume');
+      try {
+        msgs = await this.readRoom(invite, token);
+      } catch (err) {
+        throw new ToolError('RELAY_UNAVAILABLE', errorText(err));
+      }
     }
     const first = msgs.sort((a, b) => a.relay_seq - b.relay_seq)[0];
     if (!first) throw new ToolError('INVALID_STATE', 'the caller has not opened this session yet');

@@ -8,6 +8,7 @@ import {
   openEnvelope,
   replay,
   sealEnvelope,
+  signBytes,
   signEnvelope,
   validateNext,
   verifyEnvelope,
@@ -22,7 +23,7 @@ import {
   type SessionState,
   type SignoffBody,
 } from '@cma/protocol';
-import { RelayClient, RelayError, type RelayMsg } from '@cma/relay';
+import { RelayClient, RelayError, type RelayMsg, type SignFn } from '@cma/relay';
 import { appendAudit, appendLog, callPaths, readLog, writeCallRecord, type AuditRecord, type CallPaths, type CallRecord, type LocalIdentity } from './store.ts';
 
 export type ToolErrorCode = ErrorCode | 'UNKNOWN_CALL' | 'BAD_INVITE' | 'RELAY_UNAVAILABLE';
@@ -40,6 +41,11 @@ export class ToolError extends Error {
 
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Signs relay seat-resume proofs with the agent key. */
+export function agentSigner(identity: LocalIdentity): SignFn {
+  return (bytes) => signBytes(bytes, identity.agent.secretKey);
 }
 
 export const TERMINAL_STATES: ReadonlySet<SessionState> = new Set(['CLOSED', 'DECLINED', 'ABORTED', 'EXPIRED']);
@@ -131,8 +137,24 @@ export class CallRuntime {
     return this.result;
   }
 
+  /** Connects with the stored token; if the relay refuses it, resumes the seat with the agent key and retries once. */
   async connect(): Promise<void> {
     if (this.client || this.stopped || this.terminal) return;
+    try {
+      await this.open();
+    } catch (refused) {
+      try {
+        await this.resumeSeat();
+        await this.open();
+      } catch (err) {
+        throw new ToolError('RELAY_UNAVAILABLE', `cannot reach the relay at ${this.record.relay}: ${errorText(refused)}; ${errorText(err)}`);
+      }
+    }
+    this.connected = true;
+    this.afterChange();
+  }
+
+  private async open(): Promise<void> {
     const client = new RelayClient({
       relayUrl: this.record.relay,
       room: this.record.room,
@@ -149,10 +171,18 @@ export class CallRuntime {
       await client.connect();
     } catch (err) {
       if (this.client === client) this.client = null;
-      throw new ToolError('RELAY_UNAVAILABLE', `cannot reach the relay at ${this.record.relay}: ${errorText(err)}`);
+      throw err;
     }
-    this.connected = true;
-    this.afterChange();
+  }
+
+  private async resumeSeat(): Promise<void> {
+    const { token } = await RelayClient.resumeSeat(this.record.relay, this.record.room, {
+      memberKey: this.identity.agent.keyId,
+      sign: agentSigner(this.identity),
+    });
+    this.record = { ...this.record, token };
+    writeCallRecord(this.root, this.record);
+    this.audit({ kind: 'seat_resumed' });
   }
 
   /** Signs, validates against the current replay, seals and sends; resolves once the relay echo is in the log. */
