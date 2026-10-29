@@ -35,7 +35,7 @@ const USAGE = `usage: cma [--home <dir>] <command>
   approve <session|CMA-code> [--decline] [--yes-i-read-it <6 hex>]
   verify <file.md> [--expect A=<key>] [--expect B=<key>]
   relay [--port 8787] [--db path] [--host 127.0.0.1]
-  session [dir] [--exec] [-- <claude args>]
+  session [dir] [--exec] [--from <last|pick|session-id>] [-- <claude args>]
   calls
   invite <session|CMA-code>
   log <session|CMA-code> [--json]`;
@@ -185,15 +185,26 @@ async function relay(args: string[]): Promise<number> {
 
 const FORBIDDEN_PASSTHROUGH = /^--(dangerously-skip-permissions|permission-mode)(=|$)/;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function forkArgs(from: string | undefined): string[] {
+  if (from === undefined) return [];
+  if (from === 'last') return ['--continue', '--fork-session'];
+  if (from === 'pick') return ['--resume', '--fork-session'];
+  if (!UUID.test(from)) fail(`--from expects last, pick or a session id (UUID); got ${from}`);
+  return ['--resume', from, '--fork-session'];
+}
+
 async function session(root: string, args: string[]): Promise<number> {
   const dashdash = args.indexOf('--');
   const own = dashdash < 0 ? args : args.slice(0, dashdash);
   const passthrough = dashdash < 0 ? [] : args.slice(dashdash + 1);
-  const { values, positionals } = parseArgs({ args: own, allowPositionals: true, options: { exec: { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args: own, allowPositionals: true, options: { exec: { type: 'boolean' }, from: { type: 'string' } } });
   const dir = resolve(positionals[0] ?? '.');
   if (values.exec && passthrough.some((a) => FORBIDDEN_PASSTHROUGH.test(a))) {
     fail('refusing --exec with --dangerously-skip-permissions or --permission-mode');
   }
+  const fork = forkArgs(values.from);
   const base = JSON.parse(readFileSync(BASE_PROFILE, 'utf8')) as { permissions: { deny: string[] } };
   mkdirSync(root, { recursive: true, mode: 0o700 });
   // `//` marks an absolute filesystem path in permission rules; the symlink-resolved root is denied too.
@@ -204,7 +215,7 @@ async function session(root: string, args: string[]): Promise<number> {
   writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
   chmodSync(settingsPath, 0o600);
 
-  const argv = ['claude', '--settings', settingsPath, '--plugin-dir', PLUGIN_DIR, ...passthrough];
+  const argv = ['claude', '--settings', settingsPath, '--plugin-dir', PLUGIN_DIR, ...fork, ...passthrough];
   const quote = (s: string): string => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
   out(`cd ${quote(dir)} && CMA_HOME=${quote(resolve(root))} CMA_CALL_SESSION=1 ${argv.map(quote).join(' ')}`);
   if (!values.exec) return 0;
