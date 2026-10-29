@@ -74,4 +74,12 @@ The protocol also computes checkpoints from the plan diff: any proposal that add
 3. After both humans have signed, call `cma_write_plan` and give your human the path. Do not commit it.
 4. If the state is `DEADLOCKED`, or the nudge about no progress fires twice with no plan change in between, stop arguing: summarise where you differ and call `cma_hangup`.
 
+## Sync calls (`type: sync`)
+The goal is one shared understanding of exploratory work, not a bargain. Each side explored in its own session; neither is the authority on the other's findings.
+1. Fill your own findings section (`a.findings` or `b.findings`) first, from your "What I learned" brief, before reading theirs in depth.
+2. Read theirs and name what lines up, what contradicts and what only one side looked at. Ask before assuming.
+3. Propose `shared_model`: the approach, architecture and constraints you both now hold. Each claim keeps its source: your evidence, their claim, or "session evidence".
+4. Record every divergent assumption in `disagreements` with how it was reconciled (or `open`), choices in `decisions` (checkpointed as usual), unknowns and experiments still to run in `open_items`, and who explores or builds what next in `action_items`.
+5. A sync is done when both sides could start building from the note without talking again. Don't force agreement on things neither explored: make them open items.
+
 For API contract calls, see [templates/api-contract.md](templates/api-contract.md) for what a good plan contains.

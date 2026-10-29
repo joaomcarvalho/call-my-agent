@@ -1,12 +1,14 @@
 {
   "name": "call-my-agent",
-  "description": "Agent-to-agent calls for cross-team API contracts and plans",
-  "owner": { "name": "call-my-agent" },
+  "description": "Agent-to-agent calls: negotiate API contracts or sync exploratory work into one signed plan",
+  "owner": {
+    "name": "call-my-agent"
+  },
   "plugins": [
     {
       "name": "call-my-agent",
       "source": "./plugin",
-      "description": "Call a teammate's coding agent and agree a signed API contract or plan"
+      "description": "Call a teammate's coding agent to agree a signed API contract or sync exploratory work"
     }
   ]
 }
