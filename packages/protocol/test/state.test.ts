@@ -256,6 +256,20 @@ const SCENARIOS: Record<string, () => Scenario> = {
     expectAccepted(t, t.abort('B'));
     return { t, env: t.say('A', 'anyone there?'), expect: 'INVALID_STATE' };
   },
+  'propose holding the floor': () => {
+    const { t } = at('welcome');
+    return { t, env: t.propose('A', contextPatch(0, 'and keep talking'), { floor: 'hold' }), expect: 'INVALID_STATE' };
+  },
+  'third held floor message in a row': () => {
+    const { t } = at('welcome');
+    expectAccepted(t, t.say('A', 'one', { floor: 'hold' }));
+    expectAccepted(t, t.say('A', 'two', { floor: 'hold' }));
+    return { t, env: t.say('A', 'three', { floor: 'hold' }), expect: 'INVALID_STATE' };
+  },
+  'holding a floor message on the peer floor': () => {
+    const { t } = at('welcome');
+    return { t, env: t.say('B', 'me too', { floor: 'hold' }), expect: 'NOT_YOUR_FLOOR' };
+  },
   'body nested 50 000 deep': () => {
     const { t } = at('welcome');
     return { t, env: { ...t.say('A', 'x'), body: { text: 'x', junk: nested(50_000) } }, expect: 'BAD_SCHEMA' };
@@ -424,6 +438,60 @@ describe('AC5: floor', () => {
     expectAccepted(t, t.propose('B', contextPatch(0, 'two')));
     expect(t.state().floor).toBe('A');
     expect(t.state().turns).toEqual({ A: 1, B: 1 });
+  });
+
+  test('a floor message with floor hold keeps the floor with the sender and counts a turn', () => {
+    const { t } = at('welcome');
+    expectAccepted(t, t.say('A', 'answers', { floor: 'hold' }));
+    expect(t.state()).toMatchObject({ floor: 'A', holdRun: 1, turns: { A: 1, B: 0 } });
+    expectAccepted(t, t.say('A', 'and one more', { floor: 'yield' }));
+    expect(t.state()).toMatchObject({ floor: 'B', holdRun: 0, turns: { A: 2, B: 0 } });
+  });
+
+  test('the third floor message in a row cannot hold and passes the floor', () => {
+    run('third held floor message in a row');
+    const { t } = at('welcome');
+    expectAccepted(t, t.say('A', 'one', { floor: 'hold' }));
+    expectAccepted(t, t.say('A', 'two', { floor: 'hold' }));
+    expectAccepted(t, t.say('A', 'three'));
+    expect(t.state()).toMatchObject({ floor: 'B', holdRun: 0, turns: { A: 3, B: 0 } });
+    expectAccepted(t, t.say('B', 'one', { floor: 'hold' }));
+    expectAccepted(t, t.say('B', 'two', { floor: 'hold' }));
+    expect(t.state()).toMatchObject({ floor: 'B', holdRun: 2 });
+  });
+
+  test('propose with floor hold is rejected INVALID_STATE', () => {
+    unchangedApartFromRejection('propose holding the floor');
+  });
+
+  test('holding on someone else’s floor is still NOT_YOUR_FLOOR', () => {
+    run('holding a floor message on the peer floor');
+  });
+
+  test('accept with floor hold lets the accepter propose next', () => {
+    const { t } = at('say');
+    expectAccepted(t, t.propose('B', contextPatch(0, 'first')));
+    expectAccepted(t, t.accept('A', { floor: 'hold' }));
+    expect(t.state()).toMatchObject({ state: 'DISCUSSING', version: 1, floor: 'A', noProgress: 0 });
+    expectAccepted(t, t.propose('A', contextPatch(1, 'follow-up')));
+    expect(t.state()).toMatchObject({ state: 'PROPOSAL_PENDING', floor: 'B', holdRun: 0 });
+  });
+
+  test('reject and counter may hold the floor', () => {
+    const { t } = at('propose');
+    expectAccepted(t, t.reject('A', undefined, { floor: 'hold' }));
+    expect(t.state()).toMatchObject({ state: 'DISCUSSING', floor: 'A' });
+    expectAccepted(t, t.say('A', 'here is why'));
+    expectAccepted(t, t.propose('B', contextPatch(0, 'second try')));
+    expectAccepted(t, t.counter('A', contextPatch(0, 'third try'), { floor: 'hold' }));
+    expect(t.state()).toMatchObject({ state: 'PROPOSAL_PENDING', floor: 'A', counterStreak: 1 });
+  });
+
+  test('held messages count toward no_progress one by one', () => {
+    const { t } = workedTranscript('welcome', fixtureCharter({ no_progress_nudge: 2, no_progress_deadlock: 4 }));
+    expectAccepted(t, t.say('A', 'one', { floor: 'hold' }));
+    expectAccepted(t, t.say('A', 'two', { floor: 'hold' }));
+    expect(t.state()).toMatchObject({ noProgress: 2, nudge: true, floor: 'A' });
   });
 
   test('the proposer amends and withdraws without the floor and without spending turns', () => {
