@@ -9,5 +9,5 @@
     "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "3.25.76"
   },
-  "license": "FSL-1.1-ALv2"
+  "license": "MIT"
 }

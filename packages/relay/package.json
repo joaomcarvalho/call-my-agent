@@ -12,5 +12,5 @@
     "@cma/protocol": "workspace:*",
     "zod": "3.25.76"
   },
-  "license": "FSL-1.1-ALv2"
+  "license": "MIT"
 }

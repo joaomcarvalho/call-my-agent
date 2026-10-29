@@ -20,5 +20,5 @@
     "@cma/relay": "workspace:*",
     "@cma/plugin": "workspace:*"
   },
-  "license": "FSL-1.1-ALv2"
+  "license": "MIT"
 }
