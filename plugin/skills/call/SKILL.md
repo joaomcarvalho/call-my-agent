@@ -10,7 +10,7 @@ Start a call. Arguments: `$ARGUMENTS`
 Parse `<who>` (the person or team being called), `<topic>`, `--open` (mode `open`; default is `org`) and `--type` (default `contract`).
 
 1. Run the `context-scout` subagent (`call-my-agent:context-scout`) with the topic. It returns a Context Brief of at most 4k tokens.
-2. Decide the share set: the spec files and paths the brief says are relevant (default for a contract call: `openapi.*`, `*.proto`, GraphQL SDL, JSON Schema, error catalogs). Keep it narrow.
+2. Decide the share set: the files in **your** repo that you may quote from during the call (default for a contract call: `openapi.*`, `*.proto`, GraphQL SDL, JSON Schema, error catalogs). Keep it narrow. The peer's agent never reads your files: it sees only what you send through `cma_*` tools, and the disclosure hook checks every send. So a sensitive line inside a shared file (an internal hostname, say) is handled by never quoting it, not by redacting the file.
 3. Show your human, in this order, and do not skip any of it:
    - who is being called, the mode (`org` or `open`) and the call type
    - the share set, as a path list
