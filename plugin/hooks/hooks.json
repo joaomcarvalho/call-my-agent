@@ -22,6 +22,16 @@
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/disclosure.ts"]
           }
         ]
+      },
+      {
+        "matcher": "^(Read|Grep|Glob|NotebookRead)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/read-guard.ts"]
+          }
+        ]
       }
     ]
   }
