@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { inviteCode, verifySignoffSignature, type SignoffBody } from '@cma/protocol';
+import { checkBun, checkProfile, checkRelayScheme } from '../bin/diagnostics.ts';
 import { callPaths, identityPaths, readCallRecord } from '../plugin/server/store.ts';
 import { Harness, connect, freezeSimplePlan, status, waitFor, type Side } from '../plugin/test/fixtures/harness.ts';
 
@@ -260,5 +261,145 @@ describe('session', () => {
     expect(run.code).toBe(0);
     const args = readFileSync(seen, 'utf8').split('\n');
     expect(args.slice(args.indexOf('--resume'))).toEqual(['--resume', ID, '--fork-session', '']);
+  });
+});
+
+function fakeClaude(version: string): string {
+  const bin = tmp();
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\necho "${version} (Claude Code)"\n`, { mode: 0o755 });
+  return bin;
+}
+
+describe('doctor', () => {
+  let h: Harness;
+  beforeAll(() => {
+    h = new Harness();
+    harnesses.push(h);
+  });
+
+  const pathWith = (bin: string): string => `${bin}:${process.env.PATH ?? ''}`;
+
+  test('doctor passes every check and exits 0 with a healthy relay, identity and claude', async () => {
+    const home = tmp();
+    await cma(['--home', home, 'keygen']);
+    const run = await cma(['--home', home, 'doctor', '--relay', h.relay.url], { PATH: pathWith(fakeClaude('2.1.224')) });
+    expect(run.stdout).not.toContain('✗');
+    expect(run.stdout).toContain('✓ claude: claude 2.1.224');
+    expect(run.stdout).toContain('✓ relay');
+    expect(run.code).toBe(0);
+  });
+
+  test('doctor reads the relay from CMA_RELAY_URL when --relay is absent', async () => {
+    const home = tmp();
+    await cma(['--home', home, 'keygen']);
+    const run = await cma(['--home', home, 'doctor'], { PATH: pathWith(fakeClaude('2.2.0')), CMA_RELAY_URL: h.relay.url });
+    expect(run.stdout).toContain(`${h.relay.url} is healthy`);
+    expect(run.code).toBe(0);
+  });
+
+  test('doctor fails with a fix hint when claude is older than 2.1.224', async () => {
+    const home = tmp();
+    await cma(['--home', home, 'keygen']);
+    const run = await cma(['--home', home, 'doctor', '--relay', h.relay.url], { PATH: pathWith(fakeClaude('2.1.223')) });
+    expect(run.code).toBe(1);
+    expect(run.stdout).toContain('✗ claude: claude 2.1.223');
+    expect(run.stdout).toContain('fix: Claude Code 2.1.224+');
+  });
+
+  test('doctor fails when claude is not on PATH', async () => {
+    const home = tmp();
+    await cma(['--home', home, 'keygen']);
+    const bin = tmp();
+    symlinkSync(process.execPath, join(bin, 'bun'));
+    const run = await cma(['--home', home, 'doctor', '--relay', h.relay.url], { PATH: bin });
+    expect(run.code).toBe(1);
+    expect(run.stdout).toContain('✗ claude: claude not found on PATH');
+  });
+
+  test('doctor fails when there is no identity and names cma keygen', async () => {
+    const run = await cma(['--home', tmp(), 'doctor', '--relay', h.relay.url], { PATH: pathWith(fakeClaude('2.1.224')) });
+    expect(run.code).toBe(1);
+    expect(run.stdout).toContain('✗ identity');
+    expect(run.stdout).toContain('cma keygen');
+  });
+
+  test('doctor fails when a key file is group-readable', async () => {
+    const home = tmp();
+    await cma(['--home', home, 'keygen']);
+    chmodSync(identityPaths(home).humanKey, 0o644);
+    const run = await cma(['--home', home, 'doctor', '--relay', h.relay.url], { PATH: pathWith(fakeClaude('2.1.224')) });
+    expect(run.code).toBe(1);
+    expect(run.stdout).toContain('has mode 644, want 600');
+  });
+
+  test('doctor fails when the relay does not answer', async () => {
+    const home = tmp();
+    await cma(['--home', home, 'keygen']);
+    const run = await cma(['--home', home, 'doctor', '--relay', 'http://127.0.0.1:1'], { PATH: pathWith(fakeClaude('2.1.224')) });
+    expect(run.code).toBe(1);
+    expect(run.stdout).toContain('✗ relay');
+    expect(run.stdout).toContain('cma relay');
+  });
+
+  test('doctor warns without failing for a non-loopback http relay', () => {
+    expect(checkRelayScheme('http://relay.example:8787').status).toBe('warn');
+    expect(checkRelayScheme('https://relay.example').status).toBe('ok');
+    expect(checkRelayScheme('http://localhost:8787').status).toBe('ok');
+    expect(checkRelayScheme('http://127.0.0.1:8787').status).toBe('ok');
+  });
+
+  test('checkProfile fails on a profile that is not JSON', () => {
+    const file = join(tmp(), 'call.json');
+    writeFileSync(file, '{ nope');
+    expect(checkProfile(file).status).toBe('fail');
+    expect(checkProfile(resolve(import.meta.dir, '..', 'plugin', 'profiles', 'call.json')).status).toBe('ok');
+  });
+
+  test('checkBun rejects versions below 1.3', () => {
+    expect(checkBun('1.2.9').status).toBe('fail');
+    expect(checkBun('1.3.0').status).toBe('ok');
+    expect(checkBun('2.0.1').status).toBe('ok');
+  });
+});
+
+describe('statusline', () => {
+  test('statusline prints nothing and exits 0 when there are no calls', async () => {
+    const run = await cma(['--home', tmp(), 'statusline']);
+    expect(run).toEqual({ code: 0, stdout: '', stderr: '' });
+  });
+
+  test('statusline shows the code, version, floor and unanswered checkpoints of an active call', async () => {
+    const h = new Harness();
+    harnesses.push(h);
+    const alice = await h.side('alice');
+    const bob = await h.side('bob');
+    const { session } = await connect(alice, bob, 'Statusline topic');
+    await alice.manager.checkpoint({ session, question: 'Rename the field?', kind: 'breaking_change' });
+    const code = inviteCode(readCallRecord(alice.home, session).room);
+    const run = await cma(['--home', alice.home, 'statusline']);
+    expect(run.code).toBe(0);
+    expect(run.stdout.trim()).toMatch(new RegExp(`^☎ ${code} · v\\d+ · floor (you|peer) · 1 awaiting you$`));
+    const peer = await cma(['--home', bob.home, 'statusline']);
+    expect(peer.stdout).toContain(`☎ ${code}`);
+    expect(peer.stdout).not.toContain('awaiting you');
+  });
+
+  test('statusline says FROZEN and points at cma approve once the plan is frozen', async () => {
+    const h = new Harness();
+    harnesses.push(h);
+    const alice = await h.side('alice');
+    const bob = await h.side('bob');
+    const { session } = await connect(alice, bob, 'Frozen statusline');
+    await freezeSimplePlan(alice, bob, session);
+    const run = await cma(['--home', alice.home, 'statusline']);
+    expect(run.stdout.trim()).toBe(`☎ ${inviteCode(readCallRecord(alice.home, session).room)} · FROZEN · run cma approve`);
+  });
+
+  test('statusline prints nothing and exits 0 for a corrupt call', async () => {
+    const home = tmp();
+    mkdirSync(join(home, 'calls', 'broken'), { recursive: true });
+    writeFileSync(join(home, 'calls', 'broken', 'call.json'), '{ not json');
+    const run = await cma(['--home', home, 'statusline']);
+    expect(run).toEqual({ code: 0, stdout: '', stderr: '' });
   });
 });

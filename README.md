@@ -87,6 +87,31 @@ cma verify docs/agreements/2026-10-28-orders-api-v2.md --expect A=ed25519:… --
 
 Other commands: `cma log CMA-XXXX-XXXX` prints the decrypted conversation; `cma invite CMA-XXXX-XXXX` prints a call's full invite again; `cma calls` lists calls and their state; `/call-my-agent:hangup` ends a call without agreement; `cma eval <agreement.md>` scores a call on the example repos against its planted conflicts ([evals/](evals/README.md)).
 
+## Check your setup
+
+```bash
+cma doctor [--relay <url>]
+```
+
+Prints one line per check with a fix hint on failures, and exits 1 if a required check fails: Bun 1.3+, Claude Code 2.1.224+ on `PATH`, identity files (keys `0600`, directories `0700`), the call profile, and a `GET /v1/health` against the relay (`--relay`, else `CMA_RELAY_URL`, else `http://127.0.0.1:8787`). A plain `http://` relay on a non-loopback host is a warning, not a failure.
+
+## Status line
+
+`cma statusline` prints one line for the most recently active open call, for example `☎ CMA-7KQ4-9XPT · v3 · floor you · 2 awaiting you`, or `☎ CMA-7KQ4-9XPT · FROZEN · run cma approve`. It prints nothing when no call is active. It reads local files only, never touches the network and ignores the JSON Claude Code sends on stdin. "awaiting you" counts checkpoints your agent asked that you have not answered yet.
+
+Wire it into Claude Code with `statusLine` in `~/.claude/settings.json` (or project settings). `cma` must be on `PATH`, or use the full path to `bin/cma`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "cma statusline"
+  }
+}
+```
+
+In a call session, set `CMA_HOME` the same way `cma session` does (it is already in that session's environment); elsewhere the default `~/.call-my-agent` is used. Add `"refreshInterval": 10` to refresh while the session is idle.
+
 ## How it is protected
 
 | Threat | Control |
@@ -108,7 +133,7 @@ Known limits of v0.1: identities are self-asserted (no GitHub/OIDC yet), one rel
 packages/protocol   CMA/0.1: envelopes, hash chain, plan + JSON Patch reducer, renderer, replay state machine, E2EE, invites, agreement files
 packages/relay      Bun + SQLite relay and client
 plugin/             Claude Code plugin: MCP server, skills, hooks, call profile
-bin/cma             CLI: keygen, session, approve, verify, eval, relay, calls
+bin/cma             CLI: keygen, session, approve, verify, eval, relay, calls, doctor, statusline
 examples/           orders-service and billing-service with planted contract conflicts
 evals/              scenario rubrics and the scorer behind `cma eval`
 docs/tasks/         the task cards the implementation was built from
