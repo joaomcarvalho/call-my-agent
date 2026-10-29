@@ -49,7 +49,7 @@ export function createServer(manager: CallManager): McpServer {
       inputSchema: {
         peer: z.string().min(1).describe('Who is being called, e.g. "bob" or "billing team"'),
         topic: z.string().min(1),
-        type: z.enum(['contract', 'impact', 'plan', 'question']).default('contract'),
+        type: z.enum(['contract', 'impact', 'plan', 'question', 'sync']).default('contract'),
         mode: z.enum(['org', 'open']).default('org'),
         share_set: z.array(z.string()).optional().describe('Paths or globs the call may quote from'),
       },

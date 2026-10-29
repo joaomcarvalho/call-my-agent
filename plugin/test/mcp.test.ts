@@ -69,3 +69,11 @@ test('AC8: tool results are compact JSON and unknown calls are tool errors', asy
   const [error] = missing.content as { type: string; text: string }[];
   expect(JSON.parse(error!.text)).toMatchObject({ error: 'UNKNOWN_CALL' });
 });
+
+test("cma_start_call accepts type sync", async () => {
+  const client = await connected();
+  const started = await client.callTool({ name: "cma_start_call", arguments: { peer: "bob", topic: "Sync on exports", type: "sync" } });
+  expect(started.isError).toBeFalsy();
+  const [text] = started.content as { type: string; text: string }[];
+  expect(JSON.parse(text!.text)).toMatchObject({ session: expect.any(String) });
+});

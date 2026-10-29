@@ -13,7 +13,7 @@ export type Hash = `sha256:${string}`;
 export type KeyId = `ed25519:${string}`;
 
 export type Mode = 'org' | 'open';
-export type CallType = 'contract' | 'impact' | 'plan' | 'question';
+export type CallType = 'contract' | 'impact' | 'plan' | 'question' | 'sync';
 
 export type DecisionKind =
   | 'breaking_change'
@@ -374,7 +374,7 @@ export interface CounterBody extends ProposeBody {
 
 export interface AskUserPendingBody {
   checkpoint_id: string;
-  reason: 'checkpoint' | 'question';
+  reason: 'checkpoint' | 'question' | 'sync';
   kind?: DecisionKind;
   /** Plan item ids (sections, decisions, open items) this question blocks. */
   blocks: string[];

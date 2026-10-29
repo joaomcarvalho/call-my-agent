@@ -36,6 +36,7 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 
 ### 2.3 Handshake
 1. First message must be `session_open` from A with seq 1. `charter_hash == hashObject(charter)`, `plan_v0` must pass `PlanSchema` and deep-equal `createPlanV0(charter, charter_hash, charter.invitee_label)` (else `CHARTER_MISMATCH`), `plan_v0_hash == hashObject(plan_v0)`. State `INVITED`.
+   Call types are `contract | impact | plan | question | sync`. `contract` seeds `context`, `interface`, `a.impl_notes` (A), `b.impl_notes` (B), `rollout`, `risks`. `sync` (two engineers whose agents each explored a feature and reconcile into one shared understanding) seeds `goal` (joint prose), `a.findings` "Findings (A)" (owner A, prose), `b.findings` "Findings (B)" (owner B, prose), `shared_model` "Shared model" (joint prose) and `risks` (joint, risks). The other types seed `context` and `notes` (joint prose).
 2. `hello` from B: `charter_hash` matches; if `opts.joinSecret` is given, `join_proof == hex(sha256(secret || utf8(session)))` else `JOIN_PROOF_INVALID`. State `HANDSHAKE`. `identity.agent_key` must equal `from.agent_key`.
 3. `welcome` from A with matching `charter_hash` and `charter.created_at <= ts <= charter.expires_at` (else `INVALID_STATE`) → `DISCUSSING`. Floor starts with **A**.
 4. `abort` from B while `INVITED` → `DECLINED`.
@@ -166,7 +167,7 @@ Next: use the negotiate skill. Reply with cma_* tools only.
 
 ### 4.3 MCP tools (server name `cma`)
 All take/return JSON; every result includes `state`, `floor`, `version`. Errors are tool errors with the protocol `ErrorCode`.
-- `cma_start_call({peer, topic, type="contract", mode="org", share_set?: string[]})` → `{session, invite, code, fingerprint}`
+- `cma_start_call({peer, topic, type="contract" (one of `contract|impact|plan|question|sync`), mode="org", share_set?: string[]})` → `{session, invite, code, fingerprint}`
 - `cma_inspect_invite({invite})` → `type`, `mode`, `fingerprint`, `inviter: {fingerprint, assurance}`, budgets, checkpoint kinds, `expires_at`, `problems`, and `charter`: a one-line note followed by a `<counterparty_data call="<session>">` block holding `topic:`, `inviter: <human> (<org or EXTERNAL>)`, `invitee_label:` and `share_set:` with one `- <entry>` line each (no join). An invite whose charter has more than 20 share-set entries, a share-set entry over 200 characters, a topic over 200 characters or an invitee label over 100 characters is refused with `BAD_INVITE` by inspect and join; `cma_start_call` refuses the same inputs locally.
 - `cma_join_call({invite})` → `{session, peer, fingerprint, four_words}`
 - `cma_say({session, text, evidence?})`

@@ -14,11 +14,19 @@ const CONTRACT_SECTIONS: PlanSection[] = [
   section('risks', 'Risks', 'risks', 'joint'),
 ];
 
+const SYNC_SECTIONS: PlanSection[] = [
+  section('goal', 'Goal', 'prose', 'joint'),
+  section('a.findings', 'Findings (A)', 'prose', 'A'),
+  section('b.findings', 'Findings (B)', 'prose', 'B'),
+  section('shared_model', 'Shared model', 'prose', 'joint'),
+  section('risks', 'Risks', 'risks', 'joint'),
+];
+
 const GENERIC_SECTIONS: PlanSection[] = [section('context', 'Context', 'prose', 'joint'), section('notes', 'Notes', 'prose', 'joint')];
 
 /** Plan v0 seeded from the charter's call type. `meta.parties.B` is fixed here and can never be patched. */
 export function createPlanV0(charter: Charter, charterHash: Hash, inviteeHuman: string): Plan {
-  const sections = charter.type === 'contract' ? CONTRACT_SECTIONS : GENERIC_SECTIONS;
+  const sections = charter.type === 'contract' ? CONTRACT_SECTIONS : charter.type === 'sync' ? SYNC_SECTIONS : GENERIC_SECTIONS;
   return {
     schema: PLAN_SCHEMA,
     session: charter.session,

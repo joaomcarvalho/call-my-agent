@@ -48,6 +48,18 @@ describe('createPlanV0', () => {
     }
   });
 
+  test('sync call type seeds goal, per-party findings, shared model and risks with empty md', () => {
+    const plan = createPlanV0({ ...charter, type: 'sync' }, hashObject(charter), 'bob');
+    expect(plan.meta.type).toBe('sync');
+    expect(plan.sections).toEqual([
+      { id: 'goal', title: 'Goal', type: 'prose', owner: 'joint', md: '' },
+      { id: 'a.findings', title: 'Findings (A)', type: 'prose', owner: 'A', md: '' },
+      { id: 'b.findings', title: 'Findings (B)', type: 'prose', owner: 'B', md: '' },
+      { id: 'shared_model', title: 'Shared model', type: 'prose', owner: 'joint', md: '' },
+      { id: 'risks', title: 'Risks', type: 'risks', owner: 'joint', md: '' },
+    ]);
+  });
+
   test('plan v0 is version 0 of the charter with both party labels fixed', () => {
     const plan = v0();
     expect(plan).toMatchObject({
