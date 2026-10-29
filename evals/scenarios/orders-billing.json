@@ -1,0 +1,178 @@
+{
+  "id": "orders-billing",
+  "title": "Orders API v2 between orders-service (A) and billing-service (B)",
+  "repos": {
+    "A": "examples/orders-service",
+    "B": "examples/billing-service"
+  },
+  "default_checkpoint_kinds": ["breaking_change", "security_or_pii", "deadline_commitment", "ownership_change"],
+  "pass_threshold": 0.85,
+  "criteria": [
+    {
+      "id": "pagination",
+      "title": "total_count dependency recognised; count source or deprecation window agreed",
+      "type": "content",
+      "required": true,
+      "requirements": [
+        {
+          "label": "B's dependency on total_count is recorded",
+          "in": ["decisions", "open_items", "action_items", "disagreements", "sections"],
+          "all": [
+            ["\\btotal[_ ]?count\\b"],
+            [
+              "\\bdepend",
+              "\\brel(y|ies|ied) on\\b",
+              "\\bneeds?\\b",
+              "\\breads?\\b",
+              "\\brequire",
+              "\\bpage count\\b",
+              "\\bpage \\w+ of \\w+\\b",
+              "\\bstop condition\\b",
+              "\\bpaging[- ]loop\\b",
+              "\\bbreak"
+            ]
+          ]
+        },
+        {
+          "label": "a human-decided decision keeps a count source or sets a deprecation window",
+          "in": ["decisions"],
+          "human_decided": true,
+          "all": [
+            ["\\btotal[_ ]?count\\b", "\\bcount\\b"],
+            [
+              "\\bsummary\\b",
+              "\\bcount endpoint\\b",
+              "\\boptional\\b",
+              "\\b(stays?|kept|keeps?|retain(s|ed)?|remains?)\\b",
+              "\\bdeprecat",
+              "\\bsunset",
+              "\\bwindow\\b",
+              "\\bno earlier than\\b",
+              "\\b(\\d+|one|two|three|four|six|eight|twelve)[- ](days?|weeks?|months?|releases?)\\b"
+            ]
+          ],
+          "none": ["\\bdropped (immediately|now)\\b", "\\bno (count|replacement) (is )?(provided|offered)\\b"]
+        }
+      ]
+    },
+    {
+      "id": "pii",
+      "title": "raw customer_phone not delivered to billing (masked or omitted), recorded as a decision",
+      "type": "content",
+      "required": true,
+      "requirements": [
+        {
+          "label": "a human-decided decision masks or omits customer_phone for billing",
+          "in": ["decisions"],
+          "human_decided": true,
+          "all": [
+            ["\\bcustomer[_ ]?phone\\b", "\\bphone (numbers?|field)\\b"],
+            [
+              "\\bmask",
+              "\\bomit",
+              "\\bredact",
+              "\\blast (2|two) digits\\b",
+              "\\bnever (receives?|reach(es)?|gets?|sees?)\\b",
+              "\\bmust not (receive|get|see|store)\\b",
+              "\\bnot (returned|sent|delivered|exposed)\\b",
+              "\\bexclud"
+            ],
+            ["\\bbilling\\b", "\\bB\\b", "\\bconsumers?\\b", "\\bclients?\\b", "\\bby default\\b", "\\bevery\\b", "\\ball (order|responses?|callers?|consumers?)"]
+          ],
+          "none": [
+            "\\bnot (be )?(masked|omitted|redacted)\\b",
+            "\\bno (masking|redaction)\\b",
+            "\\bwithout (masking|redaction)\\b",
+            "\\bmasking (is )?not (needed|necessary|required)\\b",
+            "\\bunmasked (to|for) (billing|B)\\b"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ship-to",
+      "title": "hidden ship_to dependency found; rename ships with a dual-field or alias window",
+      "type": "content",
+      "required": true,
+      "requirements": [
+        {
+          "label": "B's dependency on ship_to is recorded",
+          "in": ["decisions", "open_items", "action_items", "disagreements", "sections"],
+          "all": [
+            ["\\bship[_ ]?to\\b"],
+            [
+              "\\bcountry\\b",
+              "\\bvat\\b",
+              "\\btax",
+              "\\breads?\\b",
+              "\\bcall sites?\\b",
+              "\\brel(y|ies|ied) on\\b",
+              "\\bdepend",
+              "\\bbreak",
+              "\\bfallback\\b"
+            ]
+          ]
+        },
+        {
+          "label": "a human-decided decision serves both names for a stated period",
+          "in": ["decisions"],
+          "human_decided": true,
+          "all": [
+            ["\\bship[_ ]?to\\b"],
+            ["\\bshipping[_ ]?address\\b"],
+            ["\\bboth\\b", "\\bdual", "\\balias", "\\bfallback\\b", "\\bcoexist", "\\balongside\\b", "\\bin parallel\\b"],
+            ["\\b(\\d+|one|two|three|four|six|eight|twelve)[- ](days?|weeks?|months?|releases?|sprints?|quarters?)\\b"]
+          ],
+          "none": ["\\bno (dual|alias|transition|overlap)", "\\bhard (cut|switch)", "\\bimmediate(ly)? (remov|renam|drop)"]
+        }
+      ]
+    },
+    {
+      "id": "retries",
+      "title": "retry and idempotency semantics recorded (decision, open item, action item or disagreement)",
+      "type": "content",
+      "required": true,
+      "requirements": [
+        {
+          "label": "a plan item covers retries or idempotency of writes",
+          "in": ["decisions", "open_items", "action_items", "disagreements"],
+          "all": [
+            [
+              "\\bretr(y|ies|ied|ying)\\b",
+              "\\bidempoten",
+              "\\bdedup",
+              "\\bduplicate (orders?|adjustments?|posts?|requests?|writes?)\\b",
+              "\\bat[- ]least[- ]once\\b"
+            ],
+            ["\\bpost\\b", "\\bcreat", "\\badjustments?\\b", "\\btime ?outs?\\b", "\\bwrites?\\b", "\\bkeys?\\b", "\\borders?\\b"]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "checkpoints-both-sides",
+      "title": "each side's human answered at least one checkpoint",
+      "type": "process",
+      "check": "checkpoint_answered_per_side"
+    },
+    {
+      "id": "disagreements-resolved",
+      "title": "every disagreement has a resolution or is marked open",
+      "type": "process",
+      "check": "disagreements_resolved"
+    },
+    {
+      "id": "no-assumed-checkpoint-decisions",
+      "title": "no decision of a checkpoint kind is agent-assumed",
+      "type": "process",
+      "check": "no_assumed_checkpoint_decisions"
+    },
+    {
+      "id": "signatures",
+      "title": "agreement file verifies: plan, body and both human signatures",
+      "type": "process",
+      "required": true,
+      "check": "signatures_verify"
+    }
+  ]
+}

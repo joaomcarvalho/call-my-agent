@@ -26,6 +26,7 @@ import {
   resolveRoot,
   type CallRecord,
 } from '../plugin/server/store.ts';
+import { formatReport, loadScenario, parseLog, scoreAgreement } from '../evals/score.ts';
 
 const PLUGIN_DIR = resolve(import.meta.dir, '..', 'plugin');
 const BASE_PROFILE = join(PLUGIN_DIR, 'profiles', 'call.json');
@@ -34,6 +35,7 @@ const USAGE = `usage: cma [--home <dir>] <command>
   keygen [--human <email>]
   approve <session|CMA-code> [--decline] [--yes-i-read-it <6 hex>]
   verify <file.md> [--expect A=<key>] [--expect B=<key>]
+  eval <file.md> [--log <log.jsonl>] [--scenario orders-billing]
   relay [--port 8787] [--db path] [--host 127.0.0.1] [--trust-proxy]
   session [dir] [--exec] [--from <last|pick|session-id>] [-- <claude args>]
   calls
@@ -165,6 +167,21 @@ function verify(args: string[]): number {
     out(`${party}: ${s.human}  ${s.human_key}  signed ${s.signed_at}`);
   }
   return 0;
+}
+
+function evaluate(args: string[]): number {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { log: { type: 'string' }, scenario: { type: 'string' } },
+  });
+  const file = positionals[0];
+  if (!file) fail('usage: cma eval <file.md> [--log <log.jsonl>] [--scenario orders-billing]');
+  const scenario = loadScenario(values.scenario ?? 'orders-billing');
+  const log = values.log === undefined ? undefined : parseLog(readFileSync(values.log, 'utf8'));
+  const report = scoreAgreement(scenario, readFileSync(file, 'utf8'), log);
+  out(formatReport(report));
+  return report.pass ? 0 : 1;
 }
 
 async function relay(args: string[]): Promise<number> {
@@ -348,6 +365,8 @@ export async function main(argv: string[], env: Record<string, string | undefine
         return await approve(root, args);
       case 'verify':
         return verify(args);
+      case 'eval':
+        return evaluate(args);
       case 'relay':
         return await relay(args);
       case 'session':
