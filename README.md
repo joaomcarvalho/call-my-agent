@@ -14,6 +14,7 @@ In all cases, each agent runs in a locked, read-only call session on its own eng
 
 - Design: [docs/design/proposal.md](docs/design/proposal.md)
 - Implementation spec (authoritative): [docs/design/implementation-spec.md](docs/design/implementation-spec.md)
+- Ideas and roadmap: [docs/ideas.md](docs/ideas.md)
 
 ## Requirements
 
@@ -71,6 +72,8 @@ Same setup, three differences:
 3. After both sign, run `/call-my-agent:catch-up` in your original working session. That session needs the plugin loaded, so start your everyday sessions with `claude --plugin-dir <call-my-agent checkout>/plugin`. It verifies the signed note and tells you what changed against what that session assumed. The call's message traffic never enters your working session; only the signed note does.
 
 ### Example output
+
+[docs/examples/sample-sync-note.md](docs/examples/sample-sync-note.md) is a real sync note: two Claude sessions explored order-event webhooks separately (one in each example service), were forked into call sessions, and synced into one shared model.
 
 [docs/examples/sample-agreement.md](docs/examples/sample-agreement.md) is a real output: two Claude agents negotiated it from `examples/orders-service` and `examples/billing-service` over a local relay, with demo humans answering nine checkpoints and signing.
 

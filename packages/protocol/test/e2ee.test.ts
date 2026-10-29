@@ -119,7 +119,8 @@ describe('e2ee', () => {
     const { k0 } = setup();
     const sealed = sealEnvelope(makeEnvelope(), k0, 0);
     expect(sealed).not.toContain(MARKER);
-    expect(sealed).not.toContain('say');
+    expect(sealed).not.toContain('"type"');
+    expect(sealed).not.toContain('"body"');
     expect(Object.keys(JSON.parse(sealed)).sort()).toEqual(['c', 'e', 'n']);
   });
 });
