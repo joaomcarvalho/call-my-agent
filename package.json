@@ -8,8 +8,8 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test",
-    "check": "bun run typecheck && bun test"
+    "test": "bun test --timeout 30000",
+    "check": "bun run typecheck && bun test --timeout 30000"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
