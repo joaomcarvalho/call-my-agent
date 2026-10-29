@@ -1,6 +1,14 @@
 # Call my agent!
 
-Two engineers' Claude Code agents negotiate a plan for them. Each agent runs in a locked, read-only call session in its own engineer's repo, argues from that repo, and stops to ask its own human at computed checkpoints. They talk through a relay that only ever sees ciphertext. The call ends with one plan file, byte-identical in both repos, signed by both humans outside the model.
+Connect two engineers' Claude Code sessions. Their agents talk to each other, ask their own human when it matters, and end with one plan both humans sign.
+
+## Two use cases
+
+**Agree an API contract between two services.** The producer's agent and the consumer's agent each argue from their own repo, with `path:line` evidence. They surface breaking changes, PII and rollout constraints, and settle on one contract: no copy-pasting from Slack into two sessions.
+
+**Sync exploratory work.** Two engineers each explored a new system or feature in their own Claude Code session and now hold different context. Each forks their exploration session into a call. Their agents compare findings, reconcile what contradicts, and write one shared model, with decisions, open questions and next steps per person. Both humans sign it, and each brings it back into their working session with `/call-my-agent:catch-up`.
+
+In both cases, each agent runs in a locked, read-only call session on its own engineer's machine and stops to ask its own human at computed checkpoints. They talk through a relay that only ever sees ciphertext. The call ends with one plan file, byte-identical on both sides, signed by both humans outside the model.
 
 - Design: [docs/design/proposal.md](docs/design/proposal.md)
 - Implementation spec (authoritative): [docs/design/implementation-spec.md](docs/design/implementation-spec.md)
@@ -47,6 +55,20 @@ Then, in Claude Code:
 | Both agents | Negotiate on their own. They stop and ask their own human when a decision is recorded, a breaking change, PII or deadline is involved, or they would share beyond the share set. |
 | Both humans | When the plan is frozen, run `! cma approve CMA-XXXX-XXXX` in the call session (or any terminal), read the plan, and type the first 6 hex characters of its hash. The model cannot sign. |
 | Either agent | `cma_write_plan` writes `docs/agreements/<date>-<slug>.md`. Open the PR yourself. |
+
+### Syncing exploratory work
+
+Same setup, three differences:
+
+1. Start the call session as a **fork of your exploration session**, so your agent remembers everything you explored while keeping the locked tools. Use the same Claude config as the exploration, since sessions are stored per config:
+   ```bash
+   cma session ~/src/my-service --from last --exec   # most recent session in that directory
+   cma session ~/src/my-service --from pick --exec   # choose from a list
+   ```
+2. Call with `--type sync`: `/call-my-agent:call bob "Order-event webhooks: what we each found" --type sync`. Your agent writes a "What I learned" brief from the exploration and shows it to you before anything is shared. Bob picks up from a fork of his own exploration session.
+3. After both sign, run `/call-my-agent:catch-up` in your original working session. That session needs the plugin loaded, so start your everyday sessions with `claude --plugin-dir <call-my-agent checkout>/plugin`. It verifies the signed note and tells you what changed against what that session assumed. The call's message traffic never enters your working session; only the signed note does.
+
+### Example output
 
 [docs/examples/sample-agreement.md](docs/examples/sample-agreement.md) is a real output: two Claude agents negotiated it from `examples/orders-service` and `examples/billing-service` over a local relay, with demo humans answering nine checkpoints and signing.
 
