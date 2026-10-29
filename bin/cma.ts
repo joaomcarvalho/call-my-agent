@@ -34,7 +34,7 @@ const USAGE = `usage: cma [--home <dir>] <command>
   keygen [--human <email>]
   approve <session|CMA-code> [--decline] [--yes-i-read-it <6 hex>]
   verify <file.md> [--expect A=<key>] [--expect B=<key>]
-  relay [--port 8787] [--db path] [--host 127.0.0.1]
+  relay [--port 8787] [--db path] [--host 127.0.0.1] [--trust-proxy]
   session [dir] [--exec] [--from <last|pick|session-id>] [-- <claude args>]
   calls
   invite <session|CMA-code>
@@ -170,11 +170,11 @@ function verify(args: string[]): number {
 async function relay(args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
-    options: { port: { type: 'string' }, db: { type: 'string' }, host: { type: 'string' } },
+    options: { port: { type: 'string' }, db: { type: 'string' }, host: { type: 'string' }, 'trust-proxy': { type: 'boolean' } },
   });
   const port = Number(values.port ?? 8787);
   if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`invalid --port ${values.port}`);
-  const server = startRelay({ port, hostname: values.host ?? '127.0.0.1', ...(values.db ? { dbPath: values.db } : {}) });
+  const server = startRelay({ port, hostname: values.host ?? '127.0.0.1', trustProxy: values['trust-proxy'] === true, ...(values.db ? { dbPath: values.db } : {}) });
   out(`relay listening on ${server.url}`);
   await new Promise<void>((done) => {
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => done());
