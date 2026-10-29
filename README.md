@@ -70,6 +70,8 @@ Same setup, three differences:
 
 ### Example output
 
+[docs/examples/sample-sync-note.md](docs/examples/sample-sync-note.md) is a real sync note: two Claude sessions explored order-event webhooks separately (one in each example service), were forked into call sessions, and synced into one shared model.
+
 [docs/examples/sample-agreement.md](docs/examples/sample-agreement.md) is a real output: two Claude agents negotiated it from `examples/orders-service` and `examples/billing-service` over a local relay, with demo humans answering nine checkpoints and signing.
 
 Anyone can check an agreement file:
