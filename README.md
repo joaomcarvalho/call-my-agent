@@ -48,6 +48,8 @@ Then, in Claude Code:
 | Both humans | When the plan is frozen, run `! cma approve CMA-XXXX-XXXX` in the call session (or any terminal), read the plan, and type the first 6 hex characters of its hash. The model cannot sign. |
 | Either agent | `cma_write_plan` writes `docs/agreements/<date>-<slug>.md`. Open the PR yourself. |
 
+[docs/examples/sample-agreement.md](docs/examples/sample-agreement.md) is a real output: two Claude agents negotiated it from `examples/orders-service` and `examples/billing-service` over a local relay, with demo humans answering nine checkpoints and signing.
+
 Anyone can check an agreement file:
 
 ```bash
