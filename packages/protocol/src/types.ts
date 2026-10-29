@@ -374,7 +374,7 @@ export interface CounterBody extends ProposeBody {
 
 export interface AskUserPendingBody {
   checkpoint_id: string;
-  reason: 'checkpoint' | 'question' | 'sync';
+  reason: 'checkpoint' | 'question';
   kind?: DecisionKind;
   /** Plan item ids (sections, decisions, open items) this question blocks. */
   blocks: string[];
