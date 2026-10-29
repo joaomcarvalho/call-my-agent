@@ -12,6 +12,7 @@ In both cases, each agent runs in a locked, read-only call session on its own en
 
 - Design: [docs/design/proposal.md](docs/design/proposal.md)
 - Implementation spec (authoritative): [docs/design/implementation-spec.md](docs/design/implementation-spec.md)
+- Ideas and roadmap: [docs/ideas.md](docs/ideas.md)
 
 ## Requirements
 
