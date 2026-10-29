@@ -12,6 +12,7 @@ import {
   renderMarkdown,
   replay,
   verifyAgreementFile,
+  type Envelope,
   type Party,
 } from '@cma/protocol';
 import { startRelay } from '@cma/relay';
@@ -36,7 +37,8 @@ const USAGE = `usage: cma [--home <dir>] <command>
   relay [--port 8787] [--db path] [--host 127.0.0.1]
   session [dir] [--exec] [-- <claude args>]
   calls
-  invite <session|CMA-code>`;
+  invite <session|CMA-code>
+  log <session|CMA-code> [--json]`;
 
 class CliError extends Error {}
 
@@ -230,6 +232,71 @@ function calls(root: string): number {
   return 0;
 }
 
+const short = (h: unknown): string => (typeof h === 'string' ? h.replace(/^sha256:/, '').slice(0, 8) : '-');
+
+function describe(env: Envelope): string {
+  const b = env.body as Record<string, any>;
+  switch (env.type) {
+    case 'say':
+      return String(b.text ?? '');
+    case 'propose':
+    case 'amend':
+    case 'counter': {
+      const ops = (b.patch ?? []).filter((op: any) => op.op !== 'test').map((op: any) => `${op.op} ${op.path}`);
+      const head = env.type === 'propose' ? '' : `on ${short(b.proposal)}: `;
+      const reasons = (b.reasons ?? []).map((r: any) => r.text).join('; ');
+      return `${head}${b.rationale ?? ''}${reasons ? `\n    reasons: ${reasons}` : ''}\n    kinds: ${(b.kinds ?? []).join(', ') || '-'}\n    changes: ${ops.join(', ') || '-'}`;
+    }
+    case 'accept':
+      return `${short(b.proposal)} -> plan ${short(b.result_hash)}${b.checkpoint_ref ? ` (checkpoint ${short(b.checkpoint_ref)})` : ''}`;
+    case 'reject':
+      return `${short(b.proposal)}: ${(b.reasons ?? []).map((r: any) => r.text).join('; ')}`;
+    case 'withdraw':
+      return short(b.proposal);
+    case 'ask_user_pending':
+      return `asking own human (${b.checkpoint_id}${b.kind ? `, ${b.kind}` : ''})${b.blocks?.length ? `, blocks ${b.blocks.join(', ')}` : ''}`;
+    case 'user_answer_summary':
+      return `${b.checkpoint_id}: ${b.summary}`;
+    case 'request_signoff':
+      return `freeze v${b.version} plan ${short(b.hash)}`;
+    case 'signoff':
+      return `${b.statement?.decision} by ${b.statement?.human} over plan ${short(b.statement?.plan_hash)}`;
+    case 'session_open':
+      return `topic: ${b.charter?.topic}`;
+    case 'hello':
+    case 'welcome':
+      return `${b.identity?.human ?? ''} ${b.identity?.agent_key ? fingerprint(b.identity.agent_key) : ''}`.trim();
+    case 'plan_final':
+      return `plan ${short(b.plan_hash)} signed by both`;
+    case 'bye':
+      return `stored ${short(b.stored)}`;
+    default:
+      return JSON.stringify(b);
+  }
+}
+
+function log(root: string, args: string[]): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { json: { type: 'boolean' } } });
+  const ref = positionals[0];
+  if (!ref) fail('usage: cma log <session|CMA-code> [--json]');
+  const record = findCall(root, ref);
+  const entries = readLog(root, record.session);
+  if (values.json) {
+    for (const env of entries) out(JSON.stringify(env));
+    return 0;
+  }
+  const r = replay(entries);
+  const rejected = new Map(r.rejected.map((x) => [x.id, x.code]));
+  for (const env of entries) {
+    const who = `${env.from.party}${env.from.party === record.party ? ' (you)' : ''}`;
+    const flag = rejected.has(env.id) ? `  [REJECTED ${rejected.get(env.id)}]` : '';
+    out(`#${env.relay_seq ?? '?'} ${env.ts.slice(11, 19)} ${who} ${env.type} ${short(env.id)}${flag}`);
+    out(`    ${describe(env).split('\n').join('\n')}`);
+  }
+  out(`state ${r.state} · plan v${r.version} · floor ${r.floor ?? '-'}`);
+  return 0;
+}
+
 function invite(root: string, args: string[]): number {
   const ref = args[0];
   if (!ref) fail('usage: cma invite <session|CMA-code>');
@@ -278,6 +345,8 @@ export async function main(argv: string[], env: Record<string, string | undefine
         return calls(root);
       case 'invite':
         return invite(root, args);
+      case 'log':
+        return log(root, args);
       default:
         err(`cma: unknown command ${JSON.stringify(command)}\n${USAGE}`);
         return 1;

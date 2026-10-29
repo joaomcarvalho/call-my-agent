@@ -142,6 +142,18 @@ describe('calls driven through the plugin managers', () => {
     expect(b.code).toBe(1);
   });
 
+  test('log prints every message in relay order with the sender and the final state', async () => {
+    const run = await cma(['--home', alice.home, 'log', frozen]);
+    expect(run.code).toBe(0);
+    const lines = run.stdout.split('\n');
+    expect(lines[0]).toMatch(/^#1 .* A \(you\) session_open /);
+    expect(lines.some((l) => / B hello /.test(l))).toBe(true);
+    expect(lines.some((l) => / request_signoff /.test(l))).toBe(true);
+    expect(lines.at(-2)).toMatch(/^state \w+ · plan v\d+ · floor /);
+    const json = await cma(['--home', alice.home, 'log', frozen, '--json']);
+    expect(JSON.parse(json.stdout.split('\n')[0]!).type).toBe('session_open');
+  });
+
   describe('verify', () => {
     const verifyText = async (text: string, extra: string[] = []): Promise<Run> => {
       const file = join(tmp(), 'agreement.md');

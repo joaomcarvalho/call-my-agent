@@ -56,7 +56,7 @@ Anyone can check an agreement file:
 cma verify docs/agreements/2026-10-28-orders-api-v2.md --expect A=ed25519:… --expect B=ed25519:…
 ```
 
-Other commands: `cma invite CMA-XXXX-XXXX` prints a call's full invite again; `cma calls` lists calls and their state; `/call-my-agent:hangup` ends a call without agreement.
+Other commands: `cma log CMA-XXXX-XXXX` prints the decrypted conversation; `cma invite CMA-XXXX-XXXX` prints a call's full invite again; `cma calls` lists calls and their state; `/call-my-agent:hangup` ends a call without agreement.
 
 ## How it is protected
 
