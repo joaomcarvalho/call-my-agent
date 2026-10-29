@@ -26,6 +26,9 @@ import type {
 } from './types.ts';
 import { DECISION_KINDS, PROTOCOL_VERSION } from './types.ts';
 
+/** Most consecutive floor messages one party may send; the last of them passes the floor (§2.4). */
+export const MAX_HOLD_RUN = 3;
+
 export interface ReplayOptions {
   joinSecret?: Uint8Array;
   /** ISO-8601 time at which the log is evaluated; drives EXPIRED. */
@@ -59,6 +62,8 @@ export interface ReplayResult {
   final: { id: Hash; planHash: Hash } | null;
   stored: Partial<Record<Party, Hash>>;
   floor: Party | null;
+  /** Floor messages in a row the floor holder sent with `floor: "hold"`. */
+  holdRun: number;
   turns: Record<Party, number>;
   turnBudget: Record<Party, number>;
   proposals: number;
@@ -295,7 +300,12 @@ function answerPosition(r: ReplayResult, ref: Hash | undefined, party: Party): n
 function floorTurn(c: Ctx, progressed: boolean): void {
   const { r } = c;
   r.turns[c.party] += 1;
-  r.floor = c.other;
+  if (c.env.floor === 'hold') {
+    r.holdRun += 1;
+  } else {
+    r.floor = c.other;
+    r.holdRun = 0;
+  }
   r.noProgress = progressed ? 0 : r.noProgress + 1;
   r.nudge = r.noProgress >= c.charter.budgets.no_progress_nudge;
 }
@@ -303,6 +313,9 @@ function floorTurn(c: Ctx, progressed: boolean): void {
 function holdsFloor(c: Ctx): Failure | null {
   if (c.r.floor !== c.party) return fail('NOT_YOUR_FLOOR', `floor is ${c.r.floor ?? 'unassigned'}`);
   if (c.r.turns[c.party] >= c.r.turnBudget[c.party]) return fail('BUDGET_EXHAUSTED', `${c.party} has used its ${c.r.turnBudget[c.party]} turns`);
+  if (c.env.floor !== 'hold') return null;
+  if (c.env.type === 'propose') return fail('INVALID_STATE', 'propose cannot hold the floor: the peer must be able to answer');
+  if (c.r.holdRun + 1 >= MAX_HOLD_RUN) return fail('INVALID_STATE', `${c.party} has held the floor for ${c.r.holdRun} messages; this one must pass it`);
   return null;
 }
 
@@ -714,6 +727,7 @@ function initialResult(): ReplayResult {
     final: null,
     stored: {},
     floor: null,
+    holdRun: 0,
     turns: { A: 0, B: 0 },
     turnBudget: { A: 0, B: 0 },
     proposals: 0,
