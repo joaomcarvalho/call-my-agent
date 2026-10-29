@@ -2,7 +2,7 @@
 
 **Owns:** `packages/protocol/src/{state,plan,render,agreement,templates}.ts` and their tests; new `packages/protocol/test/hardening.test.ts`. You may also edit `test/fixtures/*` and regenerate `worked-final.md` when a rule change below requires it (say so in the report).
 
-The reviewer's PoCs are in `/private/tmp/claude-501/-Users-joaom-workspace/a41030d1-5f67-484d-adbf-486ee169fa35/scratchpad/review/protocol.poc.test.ts`. Port each relevant PoC into `hardening.test.ts` as a test asserting the safe behaviour. All must pass.
+The reviewer's PoCs are in the reviewer's PoC file `review/protocol.poc.test.ts` (kept outside the repo). Port each relevant PoC into `hardening.test.ts` as a test asserting the safe behaviour. All must pass.
 
 ## Decisions (implement exactly; update `docs/design/implementation-spec.md` §2 to match)
 

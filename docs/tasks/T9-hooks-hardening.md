@@ -2,7 +2,7 @@
 
 **Owns:** `plugin/hooks/**`, `plugin/test/hooks.test.ts`.
 
-PoCs: `/private/tmp/claude-501/-Users-joaom-workspace/a41030d1-5f67-484d-adbf-486ee169fa35/scratchpad/review/hooks-relay.poc.test.ts` (the "fail-open" and "scan bypasses" tests). Port them into `plugin/test/hooks.test.ts` asserting the safe behaviour.
+PoCs: the reviewer's PoC file `review/hooks-relay.poc.test.ts` (kept outside the repo) (the "fail-open" and "scan bypasses" tests). Port them into `plugin/test/hooks.test.ts` asserting the safe behaviour.
 
 ## Decisions
 

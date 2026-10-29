@@ -2,7 +2,7 @@
 
 **Owns:** `plugin/server/**`, `plugin/test/**` (except `hooks.test.ts`), `packages/relay/**`, `bin/cma.ts` (only the `session` command), `test/cli.test.ts` (only session tests), implementation-spec §3–§4.
 
-PoCs: `/private/tmp/claude-501/-Users-joaom-workspace/a41030d1-5f67-484d-adbf-486ee169fa35/scratchpad/review2/poc.test.ts` (F1–F8). Port the relevant ones into repo tests asserting the safe behaviour.
+PoCs: the reviewer's PoC file `review2/poc.test.ts` (kept outside the repo) (F1–F8). Port the relevant ones into repo tests asserting the safe behaviour.
 
 ## Decisions
 

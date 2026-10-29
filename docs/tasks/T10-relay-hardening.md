@@ -2,7 +2,7 @@
 
 **Owns:** `packages/relay/**`.
 
-PoCs: `/private/tmp/claude-501/-Users-joaom-workspace/a41030d1-5f67-484d-adbf-486ee169fa35/scratchpad/review/hooks-relay.poc.test.ts` (the relay tests). Port them into `packages/relay/test/` asserting the safe behaviour. Keep the existing client API source-compatible: new parameters are optional.
+PoCs: the reviewer's PoC file `review/hooks-relay.poc.test.ts` (kept outside the repo) (the relay tests). Port them into `packages/relay/test/` asserting the safe behaviour. Keep the existing client API source-compatible: new parameters are optional.
 
 ## Decisions (update implementation-spec §3 to match)
 
