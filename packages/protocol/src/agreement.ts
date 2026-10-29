@@ -142,9 +142,9 @@ export interface AgreementExpectations {
   humanKeys?: Partial<Record<Party, KeyId>>;
 }
 
-function schemaIssue(error: { issues: { path: (string | number)[]; message: string }[] }): string {
+function schemaIssue(error: { issues: { path: PropertyKey[]; message: string }[] }): string {
   const issue = error.issues[0];
-  return issue ? `${issue.path.join('/')}: ${issue.message}` : 'invalid';
+  return issue ? `${issue.path.map(String).join('/')}: ${issue.message}` : 'invalid';
 }
 
 interface ParsedFrontMatter {

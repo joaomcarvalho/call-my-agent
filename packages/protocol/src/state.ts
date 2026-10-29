@@ -122,7 +122,7 @@ const SESSION_STATES: Record<SessionState, 'open' | 'terminal'> = {
   EXPIRED: 'terminal',
 };
 
-function enumOf<T extends string>(record: Record<T, unknown>): z.ZodEnum<[T, ...T[]]> {
+function enumOf<T extends string>(record: Record<T, unknown>): z.ZodType<T> {
   return z.enum(Object.keys(record) as [T, ...T[]]);
 }
 
