@@ -163,7 +163,7 @@ const charterSchema: z.ZodType<Charter> = z
   .object({
     session: z.string().min(1).max(128),
     topic: z.string(),
-    type: z.enum(['contract', 'impact', 'plan', 'question']),
+    type: z.enum(['contract', 'impact', 'plan', 'question', 'sync']),
     mode: z.enum(['org', 'open']),
     template: z.string(),
     inviter: identitySchema,

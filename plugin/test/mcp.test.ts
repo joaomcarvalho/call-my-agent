@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../server/index.ts';
 import { CallManager } from '../server/manager.ts';
+import { startRelay } from '@cma/relay';
 
 // implementation-spec §4.3
 const TOOLS = [
@@ -33,10 +34,10 @@ afterEach(async () => {
   while (cleanups.length) await cleanups.pop()!();
 });
 
-async function connected(): Promise<Client> {
+async function connected(relayUrl?: string): Promise<Client> {
   const home = mkdtempSync(join(tmpdir(), 'cma-mcp-'));
   cleanups.push(() => rmSync(home, { recursive: true, force: true }));
-  const manager = new CallManager({ home, env: {}, assumeCallSession: true, repoRoot: home });
+  const manager = new CallManager({ home, env: {}, assumeCallSession: true, repoRoot: home, relayUrl });
   cleanups.push(() => manager.close());
   await manager.init();
   const server = createServer(manager);
@@ -68,4 +69,14 @@ test('AC8: tool results are compact JSON and unknown calls are tool errors', asy
   expect(missing.isError).toBe(true);
   const [error] = missing.content as { type: string; text: string }[];
   expect(JSON.parse(error!.text)).toMatchObject({ error: 'UNKNOWN_CALL' });
+});
+
+test('cma_start_call accepts type sync', async () => {
+  const relay = startRelay({ port: 0 });
+  cleanups.push(() => relay.stop());
+  const client = await connected(relay.url);
+  const started = await client.callTool({ name: "cma_start_call", arguments: { peer: "bob", topic: "Sync on exports", type: "sync" } });
+  expect(started.isError).toBeFalsy();
+  const [text] = started.content as { type: string; text: string }[];
+  expect(JSON.parse(text!.text)).toMatchObject({ session: expect.any(String) });
 });
