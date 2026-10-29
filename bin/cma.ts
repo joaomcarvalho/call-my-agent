@@ -16,6 +16,7 @@ import {
   type Party,
 } from '@cma/protocol';
 import { startRelay } from '@cma/relay';
+import { DEFAULT_RELAY, formatCheck, runDoctor, statusLine } from './diagnostics.ts';
 import {
   callPaths,
   identityPaths,
@@ -26,6 +27,7 @@ import {
   resolveRoot,
   type CallRecord,
 } from '../plugin/server/store.ts';
+import { formatReport, loadScenario, parseLog, scoreAgreement } from '../evals/score.ts';
 
 const PLUGIN_DIR = resolve(import.meta.dir, '..', 'plugin');
 const BASE_PROFILE = join(PLUGIN_DIR, 'profiles', 'call.json');
@@ -34,9 +36,12 @@ const USAGE = `usage: cma [--home <dir>] <command>
   keygen [--human <email>]
   approve <session|CMA-code> [--decline] [--yes-i-read-it <6 hex>]
   verify <file.md> [--expect A=<key>] [--expect B=<key>]
-  relay [--port 8787] [--db path] [--host 127.0.0.1]
+  eval <file.md> [--log <log.jsonl>] [--scenario orders-billing]
+  relay [--port 8787] [--db path] [--host 127.0.0.1] [--trust-proxy]
   session [dir] [--exec] [--from <last|pick|session-id>] [-- <claude args>]
   calls
+  doctor [--relay <url>]
+  statusline
   invite <session|CMA-code>
   log <session|CMA-code> [--json]`;
 
@@ -167,14 +172,29 @@ function verify(args: string[]): number {
   return 0;
 }
 
+function evaluate(args: string[]): number {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { log: { type: 'string' }, scenario: { type: 'string' } },
+  });
+  const file = positionals[0];
+  if (!file) fail('usage: cma eval <file.md> [--log <log.jsonl>] [--scenario orders-billing]');
+  const scenario = loadScenario(values.scenario ?? 'orders-billing');
+  const log = values.log === undefined ? undefined : parseLog(readFileSync(values.log, 'utf8'));
+  const report = scoreAgreement(scenario, readFileSync(file, 'utf8'), log);
+  out(formatReport(report));
+  return report.pass ? 0 : 1;
+}
+
 async function relay(args: string[]): Promise<number> {
   const { values } = parseArgs({
     args,
-    options: { port: { type: 'string' }, db: { type: 'string' }, host: { type: 'string' } },
+    options: { port: { type: 'string' }, db: { type: 'string' }, host: { type: 'string' }, 'trust-proxy': { type: 'boolean' } },
   });
   const port = Number(values.port ?? 8787);
   if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`invalid --port ${values.port}`);
-  const server = startRelay({ port, hostname: values.host ?? '127.0.0.1', ...(values.db ? { dbPath: values.db } : {}) });
+  const server = startRelay({ port, hostname: values.host ?? '127.0.0.1', trustProxy: values['trust-proxy'] === true, ...(values.db ? { dbPath: values.db } : {}) });
   out(`relay listening on ${server.url}`);
   await new Promise<void>((done) => {
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => done());
@@ -308,6 +328,14 @@ function log(root: string, args: string[]): number {
   return 0;
 }
 
+async function doctor(root: string, args: string[], env: Record<string, string | undefined>): Promise<number> {
+  const { values } = parseArgs({ args, options: { relay: { type: 'string' } } });
+  const relayUrl = values.relay ?? (env.CMA_RELAY_URL || DEFAULT_RELAY);
+  const results = await runDoctor({ root, relay: relayUrl, env, profilePath: BASE_PROFILE });
+  for (const r of results) out(formatCheck(r));
+  return results.some((r) => r.status === 'fail') ? 1 : 0;
+}
+
 function invite(root: string, args: string[]): number {
   const ref = args[0];
   if (!ref) fail('usage: cma invite <session|CMA-code>');
@@ -348,12 +376,21 @@ export async function main(argv: string[], env: Record<string, string | undefine
         return await approve(root, args);
       case 'verify':
         return verify(args);
+      case 'eval':
+        return evaluate(args);
       case 'relay':
         return await relay(args);
       case 'session':
         return await session(root, args);
       case 'calls':
         return calls(root);
+      case 'doctor':
+        return await doctor(root, args, env);
+      case 'statusline': {
+        const line = statusLine(root);
+        if (line) out(line);
+        return 0;
+      }
       case 'invite':
         return invite(root, args);
       case 'log':

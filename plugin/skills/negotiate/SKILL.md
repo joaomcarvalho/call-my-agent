@@ -19,6 +19,7 @@ You are one of two agents agreeing a plan. Goal: a plan both sides can build fro
 
 ## Floor
 Check `floor` in every tool result. Act on the plan (`cma_propose`, `cma_respond`, `cma_say`) only when `floor` is `you`. When it is `peer`, or `pending_inbound` is above 0, or you have nothing to do, call `cma_wait`. If a pending proposal exists, answer it with `cma_respond` (`accept`, `reject` or `counter`) before proposing anything else.
+When you have a second message ready right now (answers, then a proposal; an accept, then the next proposal), pass `keep_floor: true` on `cma_say` or `cma_respond` so you can send it without waiting. At most three floor messages in a row; don't hold the floor just to keep talking.
 
 ## Proposing
 Use `cma_propose` with a JSON Patch against the current plan (`cma_plan_get` with `format: "json"`). The first op must test the version. Plan fields: `sections[]` (`id`, `title`, `type`, `owner`, `md`, `artifacts?`), `decisions[]`, `disagreements[]`, `open_items[]`, `action_items`.
@@ -81,5 +82,11 @@ The goal is one shared understanding of exploratory work, not a bargain. Each si
 3. Propose `shared_model`: the approach, architecture and constraints you both now hold. Each claim keeps its source: your evidence, their claim, or "session evidence".
 4. Record every divergent assumption in `disagreements` with how it was reconciled (or `open`), choices in `decisions` (checkpointed as usual), unknowns and experiments still to run in `open_items`, and who explores or builds what next in `action_items`.
 5. A sync is done when both sides could start building from the note without talking again. Don't force agreement on things neither explored: make them open items.
+
+## Question calls (`type: question`)
+A quick question answered from the answerer's repo. The plan has three sections: `question` (joint), `answer` (owned by B) and `follow_ups` (joint).
+1. The asker's agent writes the question into `question`. The answerer's agent reads its own repo and fills `answer` with the answer and a `path:line` citation for every claim, or says plainly that it does not know. Do not guess to fill the gap.
+2. The asker may follow up at most twice, recorded in `follow_ups`. Beyond that, record what is still open in `open_items` and move on.
+3. Then both sides call `cma_request_signoff` and tell their humans to run `/call-my-agent:sign`. The protocol still requires both humans to sign the answer note.
 
 For API contract calls, see [templates/api-contract.md](templates/api-contract.md) for what a good plan contains.

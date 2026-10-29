@@ -120,3 +120,23 @@ test('AC7: a signoff.json with a wrong md_hash or a foreign key is rejected loca
   await waitFor(() => existsSync(paths.signoffSent), 'signoff.sent.json');
   await waitFor(() => (status(bob, session).signoffs as { peer: boolean }).peer, 'signoff at bob');
 }, 20_000);
+
+test('cma_start_call refuses a remote plain-http relay with a RELAY_UNAVAILABLE error naming https', async () => {
+  const h = harness();
+  const alice = await h.side('alice', { relayUrl: 'http://relay.example.com:8787' });
+  const err = await rejection(alice.manager.startCall({ peer: 'bob', topic: 'Orders API' }));
+  expect(err.code).toBe('RELAY_UNAVAILABLE');
+  expect(err.detail).toMatch(/https:\/\/.*CMA_ALLOW_INSECURE_RELAY/);
+});
+
+test('cma_inspect_invite refuses an invite whose relay is remote plain http', async () => {
+  const h = harness();
+  const alice = await h.side('alice');
+  const bob = await h.side('bob');
+  const started = await alice.manager.startCall({ peer: 'bob', topic: 'Orders API' });
+  const invite = decodeInvite(started.invite as string);
+  invite.relay = 'http://relay.example.com:8787';
+  const err = await rejection(bob.manager.inspectInvite({ invite: encodeInvite(invite) }));
+  expect(err.code).toBe('BAD_INVITE');
+  expect(err.detail).toMatch(/https:\/\//);
+}, 20_000);

@@ -39735,9 +39735,14 @@ var SYNC_SECTIONS = [
   section2("shared_model", "Shared model", "prose", "joint"),
   section2("risks", "Risks", "risks", "joint")
 ];
+var QUESTION_SECTIONS = [
+  section2("question", "Question", "prose", "joint"),
+  section2("answer", "Answer", "prose", "B"),
+  section2("follow_ups", "Follow-ups", "prose", "joint")
+];
 var GENERIC_SECTIONS = [section2("context", "Context", "prose", "joint"), section2("notes", "Notes", "prose", "joint")];
 function createPlanV0(charter, charterHash, inviteeHuman) {
-  const sections = charter.type === "contract" ? CONTRACT_SECTIONS : charter.type === "sync" ? SYNC_SECTIONS : GENERIC_SECTIONS;
+  const sections = charter.type === "contract" ? CONTRACT_SECTIONS : charter.type === "sync" ? SYNC_SECTIONS : charter.type === "question" ? QUESTION_SECTIONS : GENERIC_SECTIONS;
   return {
     schema: PLAN_SCHEMA,
     session: charter.session,
@@ -39757,6 +39762,7 @@ function createPlanV0(charter, charterHash, inviteeHuman) {
   };
 }
 // packages/protocol/src/state.ts
+var MAX_HOLD_RUN = 3;
 var ERROR_CODES = {
   BAD_SCHEMA: true,
   BAD_SIGNATURE: true,
@@ -39923,7 +39929,12 @@ function answerPosition(r, ref, party4) {
 function floorTurn(c, progressed) {
   const { r } = c;
   r.turns[c.party] += 1;
-  r.floor = c.other;
+  if (c.env.floor === "hold") {
+    r.holdRun += 1;
+  } else {
+    r.floor = c.other;
+    r.holdRun = 0;
+  }
   r.noProgress = progressed ? 0 : r.noProgress + 1;
   r.nudge = r.noProgress >= c.charter.budgets.no_progress_nudge;
 }
@@ -39932,6 +39943,12 @@ function holdsFloor(c) {
     return fail("NOT_YOUR_FLOOR", `floor is ${c.r.floor ?? "unassigned"}`);
   if (c.r.turns[c.party] >= c.r.turnBudget[c.party])
     return fail("BUDGET_EXHAUSTED", `${c.party} has used its ${c.r.turnBudget[c.party]} turns`);
+  if (c.env.floor !== "hold")
+    return null;
+  if (c.env.type === "propose")
+    return fail("INVALID_STATE", "propose cannot hold the floor: the peer must be able to answer");
+  if (c.r.holdRun + 1 >= MAX_HOLD_RUN)
+    return fail("INVALID_STATE", `${c.party} has held the floor for ${c.r.holdRun} messages; this one must pass it`);
   return null;
 }
 function checkDeadlock(r, budgets) {
@@ -40362,6 +40379,7 @@ function initialResult() {
     final: null,
     stored: {},
     floor: null,
+    holdRun: 0,
     turns: { A: 0, B: 0 },
     turnBudget: { A: 0, B: 0 },
     proposals: 0,
@@ -40646,7 +40664,33 @@ class RelayError extends Error {
     this.detail = detail;
   }
 }
+
+class InsecureRelayError extends Error {
+  constructor(url2) {
+    super(`refusing to use ${url2}: a non-loopback relay must use https:// (the relay token travels in the URL). ` + "Set CMA_ALLOW_INSECURE_RELAY=1 only on a network you trust, such as a tailnet.");
+    this.name = "InsecureRelayError";
+  }
+}
+var isLoopbackHost = (host) => {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  return h === "localhost" || h === "::1" || /^127(\.\d{1,3}){3}$/.test(h);
+};
+function assertSecureRelayUrl(relayUrl, env = process.env) {
+  if (env.CMA_ALLOW_INSECURE_RELAY === "1")
+    return;
+  let url2;
+  try {
+    url2 = new URL(relayUrl);
+  } catch {
+    return;
+  }
+  if (url2.protocol === "https:" || url2.protocol === "wss:")
+    return;
+  if (!isLoopbackHost(url2.hostname))
+    throw new InsecureRelayError(relayUrl);
+}
 async function postJson(url2, body) {
+  assertSecureRelayUrl(url2);
   const res = await fetch(url2, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -40703,6 +40747,7 @@ class RelayClient {
   pending = new Map;
   firstConnect = null;
   constructor(args) {
+    assertSecureRelayUrl(args.relayUrl);
     this.args = args;
     this.lastCursor = args.cursor ?? 0;
   }
@@ -41240,8 +41285,8 @@ class CallRuntime {
     writeCallRecord(this.root, this.record);
     this.audit({ kind: "seat_resumed" });
   }
-  send(type, body) {
-    return this.exclusive(() => this.sendNow(type, body));
+  send(type, body, floor) {
+    return this.exclusive(() => this.sendNow(type, body, floor));
   }
   planAt(version2) {
     if (version2 === this.result.version)
@@ -41287,7 +41332,7 @@ class CallRuntime {
       return now > Date.parse(charter.expires_at);
     return welcomedAt !== null && now > Date.parse(welcomedAt) + charter.budgets.ttl_s * 1000;
   }
-  build(type, body, r) {
+  build(type, body, r, floor) {
     const { agent, profile } = this.identity;
     return signEnvelope({
       v: PROTOCOL_VERSION,
@@ -41299,6 +41344,7 @@ class CallRuntime {
       ack: { A: r.lastSeq.A, B: r.lastSeq.B },
       ts: new Date().toISOString(),
       type,
+      ...floor ? { floor } : {},
       body: JSON.parse(JSON.stringify(body))
     }, agent.secretKey);
   }
@@ -41320,11 +41366,11 @@ class CallRuntime {
     });
     return echoed;
   }
-  async sendNow(type, body) {
+  async sendNow(type, body, floor) {
     if (this.stopped)
       throw new ToolError("INVALID_STATE", "this call is no longer running on this server");
     const r = this.current();
-    const env = this.build(type, body, r);
+    const env = this.build(type, body, r, floor);
     const verdict = validateNext(r, env, this.replayOptions());
     if (!verdict.ok) {
       this.audit({ kind: "send_refused", type, code: verdict.code, detail: verdict.detail });
@@ -41891,6 +41937,9 @@ var NOT_CALL_SESSION_DETAIL = "call-my-agent tools only work in a call session. 
 function newSessionId() {
   return `ses_${Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => BASE32[b % 32]).join("")}`;
 }
+function holdFloor(input2) {
+  return input2.keep_floor ? "hold" : undefined;
+}
 function withVersionTest(patch, version2) {
   const first = patch[0];
   if (first && first.op === "test" && first.path === "/version")
@@ -41921,6 +41970,11 @@ function parseInvite(text2) {
   }
   if (url2.protocol !== "http:" && url2.protocol !== "https:")
     throw new ToolError("BAD_INVITE", "the relay must be an http(s) URL");
+  try {
+    assertSecureRelayUrl(invite2.relay);
+  } catch (err) {
+    throw new ToolError("BAD_INVITE", errorText(err));
+  }
   return invite2;
 }
 function charterLimitProblem(c) {
@@ -42048,6 +42102,11 @@ class CallManager {
     const limit2 = charterLimitProblem({ topic: input2.topic, invitee_label: input2.peer, share_set: input2.share_set ?? [] });
     if (limit2)
       throw new ToolError("BAD_INVITE", `the peer would refuse this invite: ${limit2}`);
+    try {
+      assertSecureRelayUrl(this.relayUrl);
+    } catch (err) {
+      throw new ToolError("RELAY_UNAVAILABLE", errorText(err));
+    }
     const id = this.identity();
     const type = input2.type ?? "contract";
     const mode = input2.mode ?? "org";
@@ -42198,7 +42257,7 @@ class CallManager {
   }
   async say(input2) {
     const rt = this.runtime(input2.session);
-    await rt.send("say", { text: input2.text, ...input2.evidence && input2.evidence.length > 0 ? { evidence: input2.evidence } : {} });
+    await rt.send("say", { text: input2.text, ...input2.evidence && input2.evidence.length > 0 ? { evidence: input2.evidence } : {} }, holdFloor(input2));
     return this.base(rt);
   }
   async propose(input2) {
@@ -42219,12 +42278,13 @@ class CallManager {
       throw new ToolError("NO_SUCH_PROPOSAL", "there is no pending proposal or sign-off request");
     const reasons2 = (input2.reasons ?? []).map((reason) => typeof reason === "string" ? { text: reason } : reason);
     const ref = input2.checkpoint_ref ? { checkpoint_ref: input2.checkpoint_ref } : {};
+    const floor = holdFloor(input2);
     if (input2.action === "accept") {
-      await rt.send("accept", { proposal: target.id, result_hash: target.result, ...ref });
+      await rt.send("accept", { proposal: target.id, result_hash: target.result, ...ref }, floor);
       return { ...this.base(rt), plan_hash: rt.result.planHash };
     }
     if (input2.action === "reject") {
-      await rt.send("reject", { proposal: target.id, reasons: reasons2 });
+      await rt.send("reject", { proposal: target.id, reasons: reasons2 }, floor);
       return this.base(rt);
     }
     if (!input2.patch || input2.rationale === undefined)
@@ -42236,7 +42296,7 @@ class CallManager {
       kinds: input2.kinds ?? [],
       rationale: input2.rationale,
       ...ref
-    });
+    }, floor);
     return { ...this.base(rt), proposal: env.id, result_hash: rt.result.pending?.resultHash ?? null };
   }
   async withdraw(input2) {
@@ -42607,6 +42667,7 @@ var patchOp2 = exports_external.object({
 });
 var patch = exports_external.array(patchOp2).describe("RFC 6902 JSON Patch against the current plan; a leading test of /version is added if missing");
 var checkpointRef = exports_external.string().describe("checkpoint_ref returned by cma_answer_checkpoint");
+var keepFloor = exports_external.boolean().optional().describe("Keep the floor to send another message right after this one; at most 3 floor messages in a row, the last must pass it");
 function ok(result) {
   return { content: [{ type: "text", text: JSON.stringify(result) }] };
 }
@@ -42648,7 +42709,8 @@ function createServer(manager) {
     inputSchema: {
       session,
       text: exports_external.string().min(1),
-      evidence: exports_external.array(exports_external.object({ ref: exports_external.string().describe("path:line"), commit: exports_external.string().optional() })).optional()
+      evidence: exports_external.array(exports_external.object({ ref: exports_external.string().describe("path:line"), commit: exports_external.string().optional() })).optional(),
+      keep_floor: keepFloor
     }
   }, (args) => run(() => manager.say(args)));
   server2.registerTool("cma_propose", {
@@ -42670,7 +42732,8 @@ function createServer(manager) {
       patch: patch.optional().describe("counter only"),
       kinds: exports_external.array(decisionKind3).optional(),
       rationale: exports_external.string().optional(),
-      checkpoint_ref: checkpointRef.optional()
+      checkpoint_ref: checkpointRef.optional(),
+      keep_floor: keepFloor
     }
   }, (args) => run(() => manager.respond({ ...args, patch: args.patch })));
   server2.registerTool("cma_withdraw", { description: "Withdraw your own pending proposal.", inputSchema: { session } }, (args) => run(() => manager.withdraw(args)));

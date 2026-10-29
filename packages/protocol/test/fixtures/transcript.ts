@@ -95,9 +95,11 @@ export interface EnvelopeOverrides {
   agentKey?: KeyId;
   session?: string;
   ts?: string;
+  floor?: 'hold' | 'yield';
 }
 
 export interface ProposalOptions {
+  floor?: 'hold' | 'yield';
   kinds?: DecisionKind[];
   checkpoint_ref?: Hash;
   rationale?: string;
@@ -155,6 +157,7 @@ export class Transcript {
         ack: { A: r.lastSeq.A, B: r.lastSeq.B },
         ts: o.ts ?? new Date(Date.parse(CREATED_AT) + (this.log.length + 1) * 1000).toISOString(),
         type,
+        ...(o.floor ? { floor: o.floor } : {}),
         body: body as Record<string, unknown>,
       },
       signer.secretKey,
@@ -183,7 +186,7 @@ export class Transcript {
   }
 
   propose(party: Party, patch: JsonPatchOp[], o: ProposalOptions = {}): Envelope {
-    return this.envelope(party, 'propose', proposalBody(patch, o));
+    return this.envelope(party, 'propose', proposalBody(patch, o), { floor: o.floor });
   }
 
   counter(party: Party, patch: JsonPatchOp[], o: ProposalOptions & { proposal?: Hash } = {}): Envelope {
@@ -191,7 +194,7 @@ export class Transcript {
       ...proposalBody(patch, o),
       proposal: o.proposal ?? this.pendingId(),
       reasons: [{ text: 'counter-proposal' }],
-    });
+    }, { floor: o.floor });
   }
 
   amend(party: Party, patch: JsonPatchOp[], o: ProposalOptions & { proposal?: Hash } = {}): Envelope {
@@ -203,7 +206,7 @@ export class Transcript {
   }
 
   /** Accepts the pending proposal, else the pending signoff request, with the hash replay computed. */
-  accept(party: Party, o: { proposal?: Hash; result_hash?: Hash; checkpoint_ref?: Hash } = {}): Envelope {
+  accept(party: Party, o: { proposal?: Hash; result_hash?: Hash; checkpoint_ref?: Hash; floor?: 'hold' | 'yield' } = {}): Envelope {
     const r = this.result;
     const target = r.pending
       ? { proposal: r.pending.id, result_hash: r.pending.resultHash }
@@ -215,13 +218,13 @@ export class Transcript {
       proposal: o.proposal ?? target!.proposal,
       result_hash: o.result_hash ?? target!.result_hash,
       ...(o.checkpoint_ref ? { checkpoint_ref: o.checkpoint_ref } : {}),
-    });
+    }, { floor: o.floor });
   }
 
-  reject(party: Party, proposal?: Hash): Envelope {
+  reject(party: Party, proposal?: Hash, o: { floor?: 'hold' | 'yield' } = {}): Envelope {
     const target = proposal ?? this.result.pending?.id ?? this.result.signoffRequest?.id;
     if (!target) throw new Error('nothing to reject');
-    return this.envelope(party, 'reject', { proposal: target, reasons: [{ text: 'not agreed' }] });
+    return this.envelope(party, 'reject', { proposal: target, reasons: [{ text: 'not agreed' }] }, o);
   }
 
   ask(party: Party, checkpointId: string, kind?: DecisionKind): Envelope {
