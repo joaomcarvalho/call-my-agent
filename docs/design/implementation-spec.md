@@ -42,7 +42,7 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 5. If `opts.now` is past `charter.expires_at` while `INVITED` → `EXPIRED`. After `welcome`, if `opts.now` is past `welcome.ts + budgets.ttl_s` → `EXPIRED` (`INVITED`/`HANDSHAKE` expire at `charter.expires_at`).
 
 ### 2.4 Floor and turns
-- Floor messages: `say`, `propose`, `counter`, `accept`, `reject`. Each requires `from.party == floor` (else `NOT_YOUR_FLOOR`) and passes the floor to the other party. Each counts one turn for the sender.
+- Floor messages: `say`, `propose`, `counter`, and `accept`/`reject` of a proposal. Each requires `from.party == floor` (else `NOT_YOUR_FLOOR`) and passes the floor to the other party. Each counts one turn for the sender.
 - `amend` and `withdraw` are floor-free but only the proposer may send them while its proposal is pending. They don't count turns.
 - Control messages (`ask_user_pending`, `user_answer_summary`, `request_signoff`, `unfreeze`, `signoff`, `plan_final`, `resolve`, `heartbeat`, `error`, `abort`, `bye`) don't need the floor and don't count turns.
 - When a party's turns reach `turns_per_party`, state → `DEADLOCKED` (reason `BUDGET_EXHAUSTED`).
@@ -75,7 +75,7 @@ Already implemented in `envelope.ts`: id = sha256(JCS(envelope minus id, sig, re
 
 ### 2.7 Freeze and sign-off
 - `request_signoff` (control) is allowed in `DISCUSSING` with no pending proposal when `version`/`hash` equal the current plan, `md_hash == sha256Hash(renderMarkdown(plan))`, and no open item has `blocking: true` and `status: "open"`. Else `INVALID_STATE`. A pending signoff request blocks new proposals (`INVALID_STATE`).
-- The other party's `accept` with `proposal = <request_signoff id>` and `result_hash = hash` → `FROZEN`. Its `reject` clears the request. (This accept/reject is a floor message.)
+- The other party's `accept` with `proposal = <request_signoff id>` and `result_hash = hash` → `FROZEN`. Its `reject` clears the request. Answering a signoff request is floor-free and costs no turn; only the party that did not send the request may answer it. Otherwise the requester could hold the floor while waiting for the answer, and neither side could move.
 - In `FROZEN`: `say` is allowed; proposals are `INVALID_STATE`. `unfreeze` by either party before any signoff → `DISCUSSING`.
 - `signoff`: `statement` must match: `session`, `version`, `plan_hash`, `md_hash` of the frozen plan, `mode` and `charter_hash` of the charter, `party == from.party`, `human == identity.human` and `human_key == identity.human_key` of that party, and `human_sig` verifies over `JCS(statement)`. Else `SIGNOFF_MISMATCH`. `decline` → `DISCUSSING`, collected signoffs void. Both `approve` → `AGREED`.
 - `plan_final` in `AGREED` must list one valid approve signoff id per party with matching hashes. `bye {stored}` with the agreed hash from both → `CLOSED`.

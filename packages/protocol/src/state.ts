@@ -488,10 +488,10 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
     const { r, charter } = c;
     const state = responseState(c);
     if (state) return state;
-    const floor = holdsFloor(c);
-    if (floor) return floor;
     const pending = r.pending;
     if (pending && pending.id === body.proposal) {
+      const floor = holdsFloor(c);
+      if (floor) return floor;
       if (pending.from === c.party) return fail('INVALID_STATE', 'cannot accept your own proposal');
       if (body.result_hash !== pending.resultHash) return fail('STALE_BASE', `result is ${pending.resultHash}`);
       if (pending.checkpoint && answerPosition(r, body.checkpoint_ref, c.party) <= r.accepted.indexOf(pending.id)) {
@@ -518,7 +518,6 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
         r.signoffRequest = null;
         r.signoffs = {};
         r.state = 'FROZEN';
-        floorTurn(c, false);
       });
     }
     return fail('NO_SUCH_PROPOSAL', `${body.proposal} is neither the pending proposal nor a signoff request`);
@@ -528,10 +527,10 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
     const { r } = c;
     const state = responseState(c);
     if (state) return state;
-    const floor = holdsFloor(c);
-    if (floor) return floor;
     const pending = r.pending;
     if (pending && pending.id === body.proposal) {
+      const floor = holdsFloor(c);
+      if (floor) return floor;
       if (pending.from === c.party) return fail('INVALID_STATE', 'cannot reject your own proposal');
       return accept(() => {
         r.rejectedHashes.push(pending.resultHash);
@@ -546,7 +545,6 @@ const RULES: { [T in MessageType]: (c: Ctx, body: Bodies[T]) => Verdict } = {
       if (request.from === c.party) return fail('INVALID_STATE', 'cannot reject your own signoff request');
       return accept(() => {
         r.signoffRequest = null;
-        floorTurn(c, false);
       });
     }
     return fail('NO_SUCH_PROPOSAL', `${body.proposal} is neither the pending proposal nor a signoff request`);

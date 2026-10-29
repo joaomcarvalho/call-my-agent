@@ -566,7 +566,7 @@ describe('AC8: freeze and sign-off', () => {
     expectAccepted(t, t.unfreeze('A'));
     expect(t.state().state).toBe('DISCUSSING');
     expect(t.state().frozen).toBeNull();
-    expectAccepted(t, t.propose('B', contextPatch(2, 'one more thing')));
+    expectAccepted(t, t.propose('A', contextPatch(2, 'one more thing')));
   });
 
   test('AC8: a signoff with the wrong md_hash is rejected SIGNOFF_MISMATCH', () => {
@@ -604,8 +604,18 @@ describe('AC8: freeze and sign-off', () => {
 
   test('say is allowed while frozen', () => {
     const { t } = at('accept_signoff');
-    expectAccepted(t, t.say('B', 'waiting for Bob'));
+    expectAccepted(t, t.say('A', 'waiting for Bob'));
     expect(t.state().state).toBe('FROZEN');
+  });
+
+  test('the peer answers a signoff request without holding the floor', () => {
+    const { t } = at('accept_signoff');
+    expectAccepted(t, t.unfreeze('A'));
+    expect(t.state().floor).toBe('A');
+    expectAccepted(t, t.requestSignoff('A'));
+    expectAccepted(t, t.accept('B'));
+    expect(t.state().state).toBe('FROZEN');
+    expect(t.state().floor).toBe('A');
   });
 
   test('rejecting a signoff request clears it', () => {
